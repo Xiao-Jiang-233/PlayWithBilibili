@@ -203,12 +203,12 @@ plugin.onLoad(() => {
      */
     const searchVideo = async (kwd) =>
         await biliFetch(
-            `https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=video&order=a&keyword=${encodeURIComponent(
+            `https://api.bilibili.com/x/web-interface/search/type?search_type=video&order=a&keyword=${encodeURIComponent(
                 kwd
             )}`
         ).then((res) => res.json())
 
-        /**
+    /**
      * 获取当前播放歌曲信息的闭包函数
      * 使用缓存机制优化性能，避免重复搜索网易云API函数
      * 基于LibSongInfo库实现
@@ -231,7 +231,8 @@ plugin.onLoad(() => {
             // 检查函数是否已缓存
             if (!cachedFunctionMap.has(searchFunctionName.toString())) {
                 // 通过BetterNCM API查找网易云音乐的内部函数
-                const findResult = betterncm.ncm.findApiFunction(searchFunctionName)
+                const findResult =
+                    betterncm.ncm.findApiFunction(searchFunctionName)
                 if (findResult) {
                     const [func, funcRoot] = findResult
                     // 绑定函数到正确的上下文并缓存
@@ -243,11 +244,15 @@ plugin.onLoad(() => {
             }
 
             // 获取缓存的函数
-            const cachedFunc = cachedFunctionMap.get(searchFunctionName.toString())
+            const cachedFunc = cachedFunctionMap.get(
+                searchFunctionName.toString()
+            )
             if (cachedFunc) {
-                return cachedFunc.apply(null, args)  // 执行函数并返回结果
+                return cachedFunc.apply(null, args) // 执行函数并返回结果
             } else {
-                throw new TypeError(`函数 ${searchFunctionName.toString()} 未找到`)
+                throw new TypeError(
+                    `函数 ${searchFunctionName.toString()} 未找到`
+                )
             }
         }
 
@@ -256,11 +261,11 @@ plugin.onLoad(() => {
          * @returns {Object} 返回包含歌曲名、歌手、时长等信息的对象
          */
         return function getPlayingSong() {
-            return callCachedSearchFunction('getPlaying', [])  // 调用网易云的getPlaying函数
+            return callCachedSearchFunction('getPlaying', []) // 调用网易云的getPlaying函数
         }
     })()
 
-        // 搜索结果缓存对象，避免重复API调用
+    // 搜索结果缓存对象，避免重复API调用
     const urlMap = {}
 
     // iframe内部视频元素的引用，用于控制播放
@@ -277,15 +282,15 @@ plugin.onLoad(() => {
 
         // 获取当前播放歌曲的信息
         const {
-            data: { name, artists, duration },  // 解构获取歌曲名、歌手、时长
+            data: { name, artists, duration }, // 解构获取歌曲名、歌手、时长
         } = getPlayingSong()
 
         // 构建搜索关键词，支持变量替换
         const kwd =
             config['search-kwd']
-                .replace('{name}', name)          // 替换歌曲名
-                .replace('{artist}', artists[0].name) ??  // 替换歌手名
-            `MV ${name} - ${artists[0].name}`    // 默认搜索关键词格式
+                .replace('{name}', name) // 替换歌曲名
+                .replace('{artist}', artists[0].name) ?? // 替换歌手名
+            `MV ${name} - ${artists[0].name}` // 默认搜索关键词格式
 
         console.log('[PlayWithBilibili] Searching: ', kwd)
 
@@ -312,21 +317,22 @@ plugin.onLoad(() => {
                     v.arcurl,
                     // 解析时长字符串为秒数：支持 "mm:ss" 或 "hh:mm:ss" 格式
                     v.duration
-                        .split(':')                          // 按冒号分割
-                        .reverse()                          // 反转数组，秒在前
-                        .reduce((a, b, i) => a + b * Math.pow(60, i), 0),  // 转换为总秒数
+                        .split(':') // 按冒号分割
+                        .reverse() // 反转数组，秒在前
+                        .reduce((a, b, i) => a + b * Math.pow(60, i), 0), // 转换为总秒数
                 ])
-                .filter((v) => Math.abs(v[1] - duration / 1000) < 5)  // 5秒误差过滤
-                .sort(  // 按时长相似度排序，相似度高的在前
+                .filter((v) => Math.abs(v[1] - duration / 1000) < 5) // 5秒误差过滤
+                .sort(
+                    // 按时长相似度排序，相似度高的在前
                     (a, b) =>
                         Math.abs(a[1] - duration / 1000) >
                         Math.abs(b[1] - duration / 1000)
                 )
 
             if (video.length > 0) {
-                url = video[0]  // 使用时长最匹配的视频
+                url = video[0] // 使用时长最匹配的视频
             } else {
-                url = null       // 没有找到合适的视频
+                url = null // 没有找到合适的视频
             }
         }
 
@@ -341,41 +347,43 @@ plugin.onLoad(() => {
             )
 
             console.log('[ PlayWithBili ] Video loaded', ifrVideo)
-            ifrVideo.volume = 0  // 强制静音，避免音频干扰
+            ifrVideo.volume = 0 // 强制静音，避免音频干扰
         } else {
             // 没有找到匹配的视频，清空播放器
             await fadeOut()
-            ifr.src = 'about:blank'  // 加载空白页面
+            ifr.src = 'about:blank' // 加载空白页面
         }
     }
 
-        // 注册音频加载事件监听器
+    // 注册音频加载事件监听器
     // 当网易云播放器加载新歌曲时，触发视频重新加载
     // 使用防抖优化，避免频繁切换歌曲时的重复调用
     legacyNativeCmder.appendRegisterCall(
-        'Load',                                    // 事件类型：加载
-        'audioplayer',                            // 目标组件：音频播放器
-        betterncm.utils.debounce(reloadVideo)     // 使用防抖包装的重载视频函数
+        'Load', // 事件类型：加载
+        'audioplayer', // 目标组件：音频播放器
+        betterncm.utils.debounce(reloadVideo) // 使用防抖包装的重载视频函数
     )
 
     // 注册播放状态同步监听器
     // 监听网易云播放器的播放状态变化，同步控制视频播放状态
     legacyNativeCmder.appendRegisterCall(
-        'PlayState',                               // 事件类型：播放状态变化
-        'audioplayer',                            // 目标组件：音频播放器
-        (_, __, state) => {                       // 回调函数，state为播放状态（1=播放，0=暂停）
-            if (state === 1) ifrVideo?.play()    // 音频播放时，视频也播放
-            else ifrVideo?.pause()                // 音频暂停时，视频也暂停
+        'PlayState', // 事件类型：播放状态变化
+        'audioplayer', // 目标组件：音频播放器
+        (_, __, state) => {
+            // 回调函数，state为播放状态（1=播放，0=暂停）
+            if (state === 1) ifrVideo?.play() // 音频播放时，视频也播放
+            else ifrVideo?.pause() // 音频暂停时，视频也暂停
         }
     )
 
     // 注册播放进度同步监听器
     // 监听音频播放进度，实时同步视频进度，确保音视频完全同步
     legacyNativeCmder.appendRegisterCall(
-        'PlayProgress',                            // 事件类型：播放进度变化
-        'audioplayer',                            // 目标组件：音频播放器
-        (_, progress) => {                        // 回调函数，progress为当前播放时间（秒）
-            if (!ifrVideo) return                 // 如果没有视频元素，直接返回
+        'PlayProgress', // 事件类型：播放进度变化
+        'audioplayer', // 目标组件：音频播放器
+        (_, progress) => {
+            // 回调函数，progress为当前播放时间（秒）
+            if (!ifrVideo) return // 如果没有视频元素，直接返回
 
             // 进度同步：当视频进度与音频进度相差超过0.3秒时，强制同步
             if (Math.abs(ifrVideo?.currentTime - progress) > 0.3)
@@ -383,7 +391,10 @@ plugin.onLoad(() => {
 
             // 播放状态检查：确保音频播放时视频也在播放
             // 通过检查LibFrontendPlay插件的播放状态来判断
-            if (loadedPlugins.LibFrontendPlay?.currentAudioPlayer?.paused === false)
+            if (
+                loadedPlugins.LibFrontendPlay?.currentAudioPlayer?.paused ===
+                false
+            )
                 ifrVideo?.play()
 
             // 强制静音：确保视频始终静音，避免与音频冲突
@@ -394,7 +405,7 @@ plugin.onLoad(() => {
 
 // 插件配置界面生成函数
 plugin.onConfig((tools) => {
-    const configDoms = []  // 存储所有配置项DOM元素的数组
+    const configDoms = [] // 存储所有配置项DOM元素的数组
 
     /**
      * 动态生成配置项DOM并绑定事件处理器
@@ -411,7 +422,7 @@ plugin.onConfig((tools) => {
             <span class="setting-item-name">${name}</span>                    // 配置项名称
             <span class="setting-item-description">${description}</span>      // 配置项描述
             <input type="${
-                typeof config[key] === 'boolean' ? 'checkbox' : 'input'     // 根据配置类型选择输入控件
+                typeof config[key] === 'boolean' ? 'checkbox' : 'input' // 根据配置类型选择输入控件
             }" style="color:black;">                                           // 输入控件样式
         `
 
@@ -419,19 +430,23 @@ plugin.onConfig((tools) => {
         const checkbox = configDom.querySelector('input')
 
         // 根据配置类型设置初始值
-        if (typeof config[key] === 'boolean') checkbox.checked = config[key]  // 布尔值：设置勾选状态
+        if (typeof config[key] === 'boolean')
+            checkbox.checked = config[key] // 布尔值：设置勾选状态
         else if (typeof config[key] === 'string') checkbox.value = config[key] // 字符串：设置输入值
 
         // 绑定值变化事件处理器
         checkbox.addEventListener('change', () => {
             // 根据配置类型更新配置对象
-            config[key] = typeof config[key] === 'boolean' ? checkbox.checked : checkbox.value
+            config[key] =
+                typeof config[key] === 'boolean'
+                    ? checkbox.checked
+                    : checkbox.value
 
-            saveConfig()        // 保存配置到localStorage
+            saveConfig() // 保存配置到localStorage
             updatePluginStyle() // 立即应用样式更改
         })
 
-        configDoms.push(configDom)  // 将配置项添加到DOM数组
+        configDoms.push(configDom) // 将配置项添加到DOM数组
     }
 
     // 创建并注入配置界面的美化CSS样式
@@ -495,28 +510,28 @@ plugin.onConfig((tools) => {
 
         // 根据启用状态控制视频播放器
         if (config.enable) {
-            fadeIn()             // 启用时淡入视频
+            fadeIn() // 启用时淡入视频
         } else {
-            fadeOut()            // 禁用时淡出视频
-            ifr.src = 'about:blank'  // 清空iframe内容
+            fadeOut() // 禁用时淡出视频
+            ifr.src = 'about:blank' // 清空iframe内容
         }
     }
 
-        /**
+    /**
      * 创建Bilibili登录功能组件
      * 提供内嵌式登录界面，自动检测登录状态并定制化显示
      */
     const loginIfr = dom(
-        'div',                                         // 容器元素
+        'div', // 容器元素
         {},
         // 登录按钮
         dom('button', {
-            innerHTML: '登录',                         // 按钮文本
+            innerHTML: '登录', // 按钮文本
             style: {
-                color: 'black',                        // 黑色文字
-                border: 'none',                        // 无边框
-                padding: '20px 20px',                  // 内边距
-                width: '100%',                         // 全宽按钮
+                color: 'black', // 黑色文字
+                border: 'none', // 无边框
+                padding: '20px 20px', // 内边距
+                width: '100%', // 全宽按钮
             },
             // 按钮点击事件处理器
             onclick: () => {
@@ -526,18 +541,18 @@ plugin.onConfig((tools) => {
                 // 添加登录iframe到容器
                 loginIfr.prepend(
                     dom('iframe', {
-                        src: 'https://bilibili.com',  // B站登录页面
-                        sandbox: 'allow-scripts allow-forms allow-same-origin',  // 安全沙箱设置
-                        class: ['login-iframe'],        // CSS类名
+                        src: 'https://bilibili.com', // B站登录页面
+                        sandbox: 'allow-scripts allow-forms allow-same-origin', // 安全沙箱设置
+                        class: ['login-iframe'], // CSS类名
                         // iframe加载完成后的处理逻辑
                         async onload() {
                             const td = this.contentWindow.document
-                            await betterncm.utils.delay(200)  // 等待页面渲染
+                            await betterncm.utils.delay(200) // 等待页面渲染
 
                             // 查找并点击登录按钮
                             const goLoginBtn = td.querySelector('.go-login-btn')
                             if (goLoginBtn) {
-                                goLoginBtn.click()  // 触发登录流程
+                                goLoginBtn.click() // 触发登录流程
 
                                 // 创建并注入自定义样式，优化登录界面显示
                                 const s = document.createElement('style')
@@ -558,7 +573,7 @@ body{                                     // 页面主体
     display:none;                          // 隐藏显示
 }
     `
-                                td.head.append(s)  // 将样式添加到页面头部
+                                td.head.append(s) // 将样式添加到页面头部
                             } else {
                                 // 如果没有找到登录按钮，说明已经登录，移除登录组件
                                 loginIfr.remove()
@@ -575,7 +590,7 @@ body{                                     // 页面主体
      * 包含标题、配置项列表、登录组件和样式定义
      */
     return dom(
-        'div',                                         // 主容器
+        'div', // 主容器
         {
             // 插件标题和描述部分
             innerHTML: ` <div class="setting-item">
@@ -583,8 +598,8 @@ body{                                     // 页面主体
         <span class="setting-item-description">使用 Bilibili 播放器自动播放 MV</span>  // 功能描述
     </div>`,
         },
-        ...configDoms,                               // 展开所有配置项DOM
-        loginIfr,                                    // 登录组件
-        style                                        // 样式定义
+        ...configDoms, // 展开所有配置项DOM
+        loginIfr, // 登录组件
+        style // 样式定义
     )
 })
