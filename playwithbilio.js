@@ -24,7 +24,6 @@ const config = {
     lighten: false, // 是否亮化背景
     'search-kwd': '{name} {artist} MV/PV', // 搜索关键词模板
     'filter-length': true, // 是否根据音频时长过滤视频
-    'enable-log': true, // 是否启用日志功能
 }
 
 // 配置项的中文显示名称和描述
@@ -40,431 +39,30 @@ const configKeys = {
         '搜索关键词，支持变量替换，{name} 为歌曲名，{artist} 为歌手名',
     ],
     'filter-length': ['过滤时长', '根据音频时长匹配视频'],
-    'enable-log': [
-        '日志',
-        '启用日志功能，将日志保存到C:/PlayWithBilibiliLogs目录',
-    ],
 }
 
-/**
- * 日志管理模块
- * 使用BetterNCM文件系统API提供高效、可靠的日志功能
- * 支持5秒间隔的日志流刷新，写入到BetterNCM数据目录
- *
- * 主要特性：
- * - 异步文件写入，避免阻塞主线程
- * - 缓冲区机制，批量写入提高性能
- * - 多级回退存储策略（文件系统 -> localStorage）
- * - 自动目录创建和文件管理
- * - 支持日志级别分类（INFO, WARN, ERROR, DEBUG）
- */
-class LogManager {
-    /**
-     * 创建日志管理器实例
-     * 自动初始化日志系统并启动定时写入
-     */
-    constructor() {
-        this.logBuffer = [] // 日志缓冲区，存储待写入的日志条目
-        this.logTimer = null // 定时器引用，用于定期刷新日志
-        this.logFilePath = null // 当前日志文件的完整路径
-        this.isWriting = false // 写入状态标志，防止并发写入
-        this.logBaseDir = null // 日志基础目录路径
-        this.init()
-    }
 
-    /**
-     * 初始化日志管理器
-     * 设置日志文件路径并启动定时写入
-     *
-     * @returns {Promise<void>} 初始化完成
-     * @throws {Error} 当初始化过程遇到不可恢复的错误时抛出
-     */
-    async init() {
-        try {
-            // 使用BetterNCM API获取数据目录，然后创建日志文件路径
-            const dataPath = await betterncm.app.getDataPath()
-            const dateStr = new Date().toISOString().split('T')[0] // 格式：YYYY-MM-DD
-            const timeStr = new Date()
-                .toTimeString()
-                .split(' ')[0]
-                .replace(/:/g, '-') // 格式：HH-MM-SS
-
-            // 创建日志目录：C盘根目录或用户数据目录
-            this.logBaseDir = `C:/PlayWithBilibiliLogs`
-
-            // 创建日志文件名：PlayWithBilibili_YYYY-MM-DD_HH-MM-SS.log
-            this.logFilePath = `${this.logBaseDir}/PlayWithBilibili_${dateStr}_${timeStr}.log`
-
-            console.log('[PlayWithBilibili] 日志系统初始化', {
-                logBaseDir: this.logBaseDir,
-                logFilePath: this.logFilePath,
-                dataPath: dataPath,
-            })
-
-            // 使用BetterNCM fs API确保日志目录存在
-            if (typeof betterncm !== 'undefined' && betterncm.fs) {
-                try {
-                    const dirExists = await betterncm.fs.exists(this.logBaseDir)
-                    if (!dirExists) {
-                        const dirCreated = await betterncm.fs.mkdir(
-                            this.logBaseDir
-                        )
-                        if (dirCreated) {
-                            console.log(
-                                '[PlayWithBilibili] 日志目录创建成功:',
-                                this.logBaseDir
-                            )
-                        } else {
-                            console.warn(
-                                '[PlayWithBilibili] 日志目录创建失败，使用C盘根目录'
-                            )
-                            this.logBaseDir = 'C:/'
-                            this.logFilePath = `${this.logBaseDir}/PlayWithBilibili_${dateStr}_${timeStr}.log`
-                        }
-                    }
-                } catch (dirError) {
-                    console.warn(
-                        '[PlayWithBilibili] 目录检查失败，使用C盘根目录:',
-                        dirError
-                    )
-                    this.logBaseDir = 'C:/'
-                    this.logFilePath = `${this.logBaseDir}/PlayWithBilibili_${dateStr}_${timeStr}.log`
-                }
-            }
-
-            // 启动定时写入，每5秒写入一次
-            this.startLogTimer()
-        } catch (error) {
-            console.error('[PlayWithBilibili] 日志初始化失败:', error)
-        }
-    }
-
-    /**
-     * 启动日志定时器
-     * 每1秒将缓冲区内容写入文件，并在程序退出时确保写入
-     *
-     * @returns {void}
-     */
-    startLogTimer() {
-        if (this.logTimer) return
-
-        this.logTimer = setInterval(() => {
-            this.flushLogs()
-        }, 1000) // 1秒间隔
-
-        // 程序退出时也写入一次
-        window.addEventListener('beforeunload', () => {
-            this.flushLogs()
-        })
-    }
-
-    /**
-     * 记录日志
-     * 将日志条目添加到缓冲区，同时输出到控制台
-     *
-     * @param {string} level - 日志级别 (INFO, WARN, ERROR, DEBUG)
-     * @param {string} message - 日志消息
-     * @param {any} [data] - 附加数据（可选）
-     * @returns {void}
-     */
-    log(level, message, data = null) {
-        if (!config['enable-log']) return
-
-        const timestamp = new Date().toISOString()
-        const logEntry = {
-            timestamp,
-            level,
-            message,
-            data: data ? JSON.stringify(data, null, 2) : null,
-        }
-
-        // 添加到缓冲区
-        this.logBuffer.push(logEntry)
-
-        // 同时输出到控制台
-        const consoleMessage = `[PlayWithBilibili] ${level}: ${message}`
-        switch (level) {
-            case 'ERROR':
-                console.error(consoleMessage, data)
-                break
-            case 'WARN':
-                console.warn(consoleMessage, data)
-                break
-            case 'DEBUG':
-                console.debug(consoleMessage, data)
-                break
-            default:
-                console.log(consoleMessage, data)
-        }
-    }
-
-    /**
-     * 刷新日志到文件
-     * 使用BetterNCM fs API将缓冲区中的所有日志写入文件
-     * 支持追加到现有文件或创建新文件，包含完整的错误处理
-     *
-     * @returns {Promise<void>} 写入完成
-     * @throws {Error} 当文件写入失败且备用存储也失败时抛出
-     */
-    async flushLogs() {
-        if (
-            !config['enable-log'] ||
-            this.isWriting ||
-            this.logBuffer.length === 0
-        )
-            return
-
-        this.isWriting = true
-
-        try {
-            // 格式化日志条目
-            const logText =
-                this.logBuffer
-                    .map((entry) => {
-                        let line = `[${entry.timestamp}] ${entry.level}: ${entry.message}`
-                        if (entry.data) {
-                            line += `\n${entry.data}`
-                        }
-                        return line
-                    })
-                    .join('\n\n') + '\n'
-
-            // 使用BetterNCM的fs API写入文件
-            if (typeof betterncm !== 'undefined' && betterncm.fs) {
-                let success
-
-                try {
-                    // 检查文件是否存在
-                    const fileExists = await betterncm.fs.exists(
-                        this.logFilePath
-                    )
-
-                    if (fileExists) {
-                        // 追加到现有文件
-                        try {
-                            const existingContent =
-                                await betterncm.fs.readFileText(
-                                    this.logFilePath
-                                )
-                            const newContent = existingContent + logText
-                            success = await betterncm.fs.writeFileText(
-                                this.logFilePath,
-                                newContent
-                            )
-                        } catch (readError) {
-                            console.warn(
-                                '[PlayWithBilibili] 读取现有日志文件失败，创建新文件:',
-                                readError
-                            )
-                            success = await betterncm.fs.writeFileText(
-                                this.logFilePath,
-                                logText
-                            )
-                        }
-                    } else {
-                        // 创建新文件
-                        success = await betterncm.fs.writeFileText(
-                            this.logFilePath,
-                            logText
-                        )
-                    }
-
-                    if (success) {
-                        console.log(
-                            `[PlayWithBilibili] 已写入 ${this.logBuffer.length} 条日志到文件: ${this.logFilePath}`
-                        )
-                    } else {
-                        throw new Error('betterncm.fs.writeFileText 返回 false')
-                    }
-                } catch (apiError) {
-                    console.warn('[PlayWithBilibili] fs API调用失败:', apiError)
-                    throw apiError
-                }
-            } else {
-                throw new Error('BetterNCM fs API不可用')
-            }
-
-            // 清空缓冲区
-            this.logBuffer = []
-        } catch (error) {
-            console.error('[PlayWithBilibili] 写入日志文件失败:', error)
-            // 使用localStorage作为备用存储
-            await this.fallbackStorage(logText)
-        } finally {
-            this.isWriting = false
-        }
-    }
-
-    /**
-     * 备用存储方案
-     * 当文件写入失败时，将日志保存到localStorage
-     */
-    async fallbackStorage(logText) {
-        try {
-            const existingLogs =
-                localStorage.getItem('playwithbilio_logs') || ''
-            const newLogs = existingLogs + logText
-
-            // 限制localStorage大小，避免溢出
-            if (newLogs.length > 1024 * 1024) {
-                // 1MB限制
-                const trimmedLogs = newLogs.substring(
-                    newLogs.length - 1024 * 1024
-                )
-                localStorage.setItem('playwithbilio_logs', trimmedLogs)
-            } else {
-                localStorage.setItem('playwithbilio_logs', newLogs)
-            }
-
-            console.log('[PlayWithBilibili] 日志已保存到localStorage备用存储')
-        } catch (storageError) {
-            console.error(
-                '[PlayWithBilibili] localStorage备用存储也失败:',
-                storageError
-            )
-        }
-    }
-
-    /**
-     * 手动刷新日志
-     * 立即将当前缓冲区写入文件
-     */
-    async forceFlush() {
-        await this.flushLogs()
-    }
-
-    /**
-     * 停止日志管理器
-     * 清理定时器并写入剩余日志
-     */
-    stop() {
-        if (this.logTimer) {
-            clearInterval(this.logTimer)
-            this.logTimer = null
-        }
-        this.flushLogs() // 最后写入一次
-    }
-
-    /**
-     * 获取当前缓冲区大小
-     */
-    getBufferSize() {
-        return this.logBuffer.length
-    }
-
-    /**
-     * 获取日志文件路径
-     */
-    getLogFilePath() {
-        return this.logFilePath
-    }
-
-    /**
-     * 检查日志文件是否存在
-     */
-    async checkLogFileExists() {
-        if (!this.logFilePath) return false
-        try {
-            if (typeof betterncm !== 'undefined' && betterncm.fs) {
-                return await betterncm.fs.exists(this.logFilePath)
-            }
-            return false
-        } catch (error) {
-            console.warn('[PlayWithBilibili] 检查日志文件存在性失败:', error)
-            return false
-        }
-    }
-
-    /**
-     * 获取日志目录路径
-     */
-    getLogBaseDir() {
-        return this.logBaseDir
-    }
-
-    /**
-     * 挂载日志文件并提供访问URL
-     * 使用BetterNCM fs API的mountFile功能
-     */
-    async mountLogFile() {
-        if (!this.logFilePath) {
-            throw new Error('日志文件路径未初始化')
-        }
-
-        try {
-            const exists = await this.checkLogFileExists()
-            if (!exists) {
-                throw new Error('日志文件不存在')
-            }
-
-            if (typeof betterncm !== 'undefined' && betterncm.fs) {
-                return await betterncm.fs.mountFile(this.logFilePath)
-            } else {
-                throw new Error('BetterNCM fs API不可用')
-            }
-        } catch (error) {
-            console.error('[PlayWithBilibili] 挂载日志文件失败:', error)
-            throw error
-        }
-    }
-
-    /**
-     * 读取日志文件内容
-     */
-    async readLogFile() {
-        if (!this.logFilePath) {
-            throw new Error('日志文件路径未初始化')
-        }
-
-        try {
-            const exists = await this.checkLogFileExists()
-            if (!exists) {
-                throw new Error('日志文件不存在')
-            }
-
-            if (typeof betterncm !== 'undefined' && betterncm.fs) {
-                return await betterncm.fs.readFileText(this.logFilePath)
-            } else {
-                throw new Error('BetterNCM fs API不可用')
-            }
-        } catch (error) {
-            console.error('[PlayWithBilibili] 读取日志文件失败:', error)
-            throw error
-        }
-    }
-}
-
-// 创建全局日志管理器实例
-const logger = new LogManager()
-
-// 提供便捷的日志函数
-const logInfo = (message, data) => logger.log('INFO', message, data)
-const logWarn = (message, data) => logger.log('WARN', message, data)
-const logError = (message, data) => logger.log('ERROR', message, data)
-const logDebug = (message, data) => logger.log('DEBUG', message, data)
-
-// 创建嵌入式的Bilibili播放器iframe
+// 创建Bilibili播放器iframe
 const ifr = document.createElement('iframe')
-ifr.classList.add('betterncm-plugin-playwithbilio') // 添加插件专用CSS类名
-ifr.src = 'https://www.bilibili.com' // 设置初始源为B站首页
-ifr.sandbox = 'allow-scripts allow-forms allow-same-origin' // 安全沙箱设置，允许脚本、表单和同源访问
+ifr.classList.add('betterncm-plugin-playwithbilio') // 插件专用CSS类名
+ifr.src = 'https://www.bilibili.com' // 初始源为B站首页
+ifr.sandbox = 'allow-scripts allow-forms allow-same-origin' // 安全沙箱设置
 
-// 创建插件的样式元素
+// 创建插件样式元素
 const pluginStyle = document.createElement('style')
-pluginStyle.innerHTML = `` // 初始化为空样式，后续会动态更新
-document.head.appendChild(pluginStyle) // 将样式添加到页面头部
+pluginStyle.innerHTML = `` // 初始化为空样式
+document.head.appendChild(pluginStyle) // 添加到页面头部
 
 /**
  * 更新插件样式
  * 根据配置动态生成CSS样式，控制视频播放器的视觉效果
- * 包括模糊、亮度调节、透明度、位置等属性
  *
  * 样式特性：
- * - 模糊效果：可配置的10px模糊
- * - 亮度调节：暗化(0.5倍)或亮化(1.5倍)
+ * - 模糊效果：10px模糊
+ * - 亮度调节：暗化(0.5x)或亮化(1.5x)
  * - 透明度控制：支持淡入淡出动画
  * - 全屏覆盖：固定定位，覆盖整个窗口
- * - 层级管理：z-index:9，确保在网易云界面下方
+ * - 层级管理：z-index:9，在网易云界面下方
  *
  * @returns {void}
  */
@@ -476,14 +74,14 @@ const updatePluginStyle = () => {
     } ${config.lighten ? 'brightness(1.5)' : ''};
         width: 100%;
         height: 100%;
-        opacity: 0;                                    // 初始透明，用于淡入淡出效果
+        opacity: 0;                                    // 初始透明，用于淡入淡出
         position: fixed;                                // 固定定位覆盖整个屏幕
         top: 0;
         left: 0;
         right: 0;
         bottom: 0;
         transition: opacity 200ms;                      // 200ms淡入淡出动画
-        z-index: 9;                                     // 层级设置，确保在网易云下方
+        z-index: 9;                                     // 层级设置，在网易云下方
     }
     `
 }
@@ -542,7 +140,7 @@ const fadeIn = () => {
 
 // 插件主入口函数
 plugin.onLoad(() => {
-    logInfo('插件开始加载', {
+    console.log('[PlayWithBilibili] 插件开始加载', {
         version: 'Pro',
         timestamp: new Date().toISOString(),
     })
@@ -553,7 +151,7 @@ plugin.onLoad(() => {
             config[key] = JSON.parse(localStorage[`playwithbilio.${key}`])
         } catch (e) {} // 忽略解析错误，使用默认值
     }
-    logInfo('配置加载完成', config)
+    console.log('[PlayWithBilibili] 配置加载完成', config)
     updatePluginStyle() // 应用初始样式
 
     // 播放器状态标志，避免重复初始化
@@ -563,6 +161,13 @@ plugin.onLoad(() => {
     /**
      * 重置播放器状态
      * 当切换歌曲时调用，允许重新初始化播放器
+     *
+     * 功能说明：
+     * - 重置播放器初始化标志
+     * - 清理定时器防止内存泄漏
+     * - 允许新歌曲重新初始化播放器
+     *
+     * @returns {void}
      */
     const resetPlayerState = () => {
         playerInitialized = false
@@ -574,21 +179,28 @@ plugin.onLoad(() => {
             }
             playerIntervalId = null
         }
-        logDebug('播放器状态已重置')
+        console.log('[PlayWithBilibili] 播放器状态已重置')
     }
 
     /**
      * 初始化Bilibili播放器
      * 自动进入网页全屏、隐藏控制栏、设置弹幕状态等
+     *
+     * 初始化流程：
+     * 1. 检查是否已初始化，避免重复操作
+     * 2. 查找并点击网页全屏按钮
+     * 3. 注入自定义CSS样式
+     * 4. 设置定时器监控播放器状态
+     * 5. 处理弹幕开关和登录弹窗
      */
     const initBiliPlayer = async () => {
         // 如果播放器已经初始化，直接返回
         if (playerInitialized) {
-            logDebug('播放器已初始化，跳过重复初始化')
+            console.log('[PlayWithBilibili] 播放器已初始化，跳过重复初始化')
             return
         }
 
-        logInfo('开始初始化Bilibili播放器')
+        console.log('[PlayWithBilibili] 开始初始化Bilibili播放器')
 
         try {
             // 等待并找到网页全屏按钮
@@ -601,11 +213,11 @@ plugin.onLoad(() => {
             )
 
             if (!btnFullScreen) {
-                logError('未找到网页全屏按钮')
+                console.error('[PlayWithBilibili] 未找到网页全屏按钮')
                 return
             }
 
-            logInfo('找到网页全屏按钮，点击进入全屏模式')
+            console.log('[PlayWithBilibili] 找到网页全屏按钮，点击进入全屏模式')
             btnFullScreen.click() // 点击进入网页全屏模式
 
             // 在iframe内部添加自定义样式
@@ -617,16 +229,20 @@ plugin.onLoad(() => {
              */
             const updateStyle = () => {
                 style.innerHTML = `
-            .bpx-player-control-bottom,      // 播放器底部控制栏
-            .bpx-player-toast-wrap,          // 提示信息
-            .bpx-player-control-wrap{        // 播放器控制容器
-                display: none !important;    // 隐藏这些元素
+            /* 播放器底部控制栏 */
+            .bpx-player-control-bottom,
+            /* 提示信息 */
+            .bpx-player-toast-wrap,
+            /* 播放器控制容器 */
+            .bpx-player-control-wrap{
+                display: none !important;    /* 隐藏这些元素 */
             }
 
+            /* 视频适配模式：裁剪或包含 */
             video {
                 object-fit: ${
                     config.cover ? 'cover' : 'contain'
-                };  // 视频适配模式：裁剪或包含
+                };
             }
         `
             }
@@ -674,7 +290,7 @@ plugin.onLoad(() => {
                 ) {
                     btnFullScreen.click()
                     lastFullScreenCheck = now
-                    logInfo('重新进入网页全屏模式')
+                    console.log('[PlayWithBilibili] 重新进入网页全屏模式')
                 }
 
                 updateStyle() // 重新应用样式，确保设置生效
@@ -682,9 +298,9 @@ plugin.onLoad(() => {
 
             // 标记播放器已初始化
             playerInitialized = true
-            logInfo('Bilibili播放器初始化完成')
+            console.log('[PlayWithBilibili] Bilibili播放器初始化完成')
         } catch (error) {
-            logError('Bilibili播放器初始化失败', error)
+            console.error('[PlayWithBilibili] Bilibili播放器初始化失败', error)
         }
     }
 
@@ -701,7 +317,7 @@ plugin.onLoad(() => {
      * @returns {Promise<Object>} 返回搜索结果的JSON对象
      */
     const searchVideo = async (kwd) => {
-        logInfo('开始搜索视频', { keyword: kwd })
+        console.log('[PlayWithBilibili] 开始搜索视频', { keyword: kwd })
         try {
             const response = await biliFetch(
                 `https://api.bilibili.com/x/web-interface/search/type?search_type=video&order=a&keyword=${encodeURIComponent(
@@ -710,7 +326,7 @@ plugin.onLoad(() => {
             )
             const result = await response.json()
 
-            logInfo('视频搜索完成', {
+            console.log('[PlayWithBilibili] 视频搜索完成', {
                 keyword: kwd,
                 resultCount: result.data?.result?.length || 0,
                 statusCode: result.code,
@@ -718,7 +334,7 @@ plugin.onLoad(() => {
 
             return result
         } catch (error) {
-            logError('视频搜索失败', { keyword: kwd, error: error.message })
+            console.error('[PlayWithBilibili] 视频搜索失败', { keyword: kwd, error: error.message })
             throw error
         }
     }
@@ -727,6 +343,11 @@ plugin.onLoad(() => {
      * 获取当前播放歌曲信息的闭包函数
      * 使用缓存机制优化性能，避免重复搜索网易云API函数
      * 基于LibSongInfo库实现
+     *
+     * 缓存机制说明：
+     * - 使用Map缓存已找到的API函数
+     * - 避免重复调用BetterNCM的findApiFunction
+     * - 提高性能，减少函数查找开销
      */
     const getPlayingSong = (() => {
         // 函数缓存Map，避免重复查找API函数
@@ -737,6 +358,13 @@ plugin.onLoad(() => {
         /**
          * 调用缓存的搜索函数
          * 使用缓存机制查找并调用网易云音乐的API函数
+         *
+         * 缓存策略：
+         * 1. 检查函数是否已缓存
+         * 2. 未缓存时通过BetterNCM API查找函数
+         * 3. 绑定函数到正确上下文并缓存
+         * 4. 执行缓存的函数
+         *
          * @param {string} searchFunctionName - 要查找的函数名
          * @param {Array} args - 传递给函数的参数数组
          * @returns {*} 函数执行结果
@@ -808,7 +436,7 @@ plugin.onLoad(() => {
                     .replace('{artist}', artists[0].name) ?? // 替换歌手名
                 `MV ${name} - ${artists[0].name}` // 默认搜索关键词格式
 
-            logInfo('开始加载视频', {
+            console.log('[PlayWithBilibili] 开始加载视频', {
                 songName: name,
                 artist: artists[0].name,
                 duration: duration,
@@ -832,14 +460,24 @@ plugin.onLoad(() => {
 
             // 如果启用了时长过滤功能
             if (config['filter-length']) {
-                // 时长匹配算法：
-                // 1. 将搜索结果转换为 [URL, 时长(秒)] 的数组格式
-                // 2. 过滤出与音频时长相差小于5秒的视频
-                // 3. 按时长相似度排序，选择最匹配的视频
+                /**
+                 * 时长匹配算法
+                 * 目标：找到与音频时长最接近的MV视频
+                 *
+                 * 算法步骤：
+                 * 1. 转换：将搜索结果转换为 [URL, 时长(秒)] 数组
+                 * 2. 过滤：保留与音频时长相差小于5秒的视频
+                 * 3. 排序：按时长相似度排序（误差小的在前）
+                 *
+                 * 时长解析逻辑：
+                 * - 支持 "mm:ss" 或 "hh:mm:ss" 格式
+                 * - 按冒号分割后反转数组，秒在前
+                 * - 使用reduce计算总秒数：秒 + 分*60 + 时*3600
+                 */
                 const video = urlMap[kwd].data.result
                     .map((v) => [
                         v.arcurl,
-                        // 解析时长字符串为秒数：支持 "mm:ss" 或 "hh:mm:ss" 格式
+                        // 解析时长字符串为秒数
                         v.duration
                             .split(':') // 按冒号分割
                             .reverse() // 反转数组，秒在前
@@ -877,12 +515,12 @@ plugin.onLoad(() => {
                 ifrVideo.volume = 0 // 强制静音，避免音频干扰
             } else {
                 // 没有找到匹配的视频，清空播放器
-                logWarn('未找到匹配的视频', { keyword: kwd })
+                console.warn('[PlayWithBilibili] 未找到匹配的视频', { keyword: kwd })
                 await fadeOut()
                 ifr.src = 'about:blank' // 加载空白页面
             }
         } catch (error) {
-            logError('视频加载失败', error)
+            console.error('[PlayWithBilibili] 视频加载失败', error)
             // 加载失败时清空播放器
             await fadeOut()
             ifr.src = 'about:blank'
@@ -945,16 +583,12 @@ plugin.onLoad(() => {
         }
     )
 
-    logInfo('插件加载完成', {
-        logEnabled: config['enable-log'],
-        logFilePath: logger.logFilePath,
-        bufferSize: logger.getBufferSize(),
-    })
+    console.log('[PlayWithBilibili] 插件加载完成')
 })
 
 // 插件配置界面生成函数
 plugin.onConfig((tools) => {
-    logInfo('打开配置界面')
+    console.log('[PlayWithBilibili] 打开配置界面')
     const configDoms = [] // 存储所有配置项DOM元素的数组
 
     /**
@@ -1069,23 +703,24 @@ plugin.onConfig((tools) => {
      * 保存配置到localStorage并应用设置
      * 遍历所有配置项，将当前配置值序列化存储
      * 根据启用状态控制视频播放器的显示
+     *
+     * 功能说明：
+     * - 序列化配置对象并存储到localStorage
+     * - 记录配置变更日志
+     * - 根据日志启用状态更新日志功能
+     *
+     * @returns {void}
      */
     function saveConfig() {
-        logInfo('保存配置变更', { oldConfig: { ...config } })
+        console.log('[PlayWithBilibili] 保存配置变更', { oldConfig: { ...config } })
 
         // 逐个保存配置项到localStorage
         for (const key in configKeys) {
             localStorage[`playwithbilio.${key}`] = JSON.stringify(config[key])
         }
 
-        logInfo('配置已保存到localStorage', config)
+        console.log('[PlayWithBilibili] 配置已保存到localStorage', config)
 
-        // 记录日志状态变更
-        if (config['enable-log']) {
-            logInfo('日志功能已启用')
-        } else {
-            logInfo('日志功能已禁用')
-        }
     }
 
     /**
