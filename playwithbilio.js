@@ -50,19 +50,34 @@ const configKeys = {
  * 日志管理模块
  * 使用BetterNCM文件系统API提供高效、可靠的日志功能
  * 支持5秒间隔的日志流刷新，写入到BetterNCM数据目录
+ *
+ * 主要特性：
+ * - 异步文件写入，避免阻塞主线程
+ * - 缓冲区机制，批量写入提高性能
+ * - 多级回退存储策略（文件系统 -> localStorage）
+ * - 自动目录创建和文件管理
+ * - 支持日志级别分类（INFO, WARN, ERROR, DEBUG）
  */
 class LogManager {
+    /**
+     * 创建日志管理器实例
+     * 自动初始化日志系统并启动定时写入
+     */
     constructor() {
-        this.logBuffer = [] // 日志缓冲区
-        this.logTimer = null // 定时器
-        this.logFilePath = null // 日志文件路径
-        this.isWriting = false // 是否正在写入文件
+        this.logBuffer = [] // 日志缓冲区，存储待写入的日志条目
+        this.logTimer = null // 定时器引用，用于定期刷新日志
+        this.logFilePath = null // 当前日志文件的完整路径
+        this.isWriting = false // 写入状态标志，防止并发写入
+        this.logBaseDir = null // 日志基础目录路径
         this.init()
     }
 
     /**
      * 初始化日志管理器
      * 设置日志文件路径并启动定时写入
+     *
+     * @returns {Promise<void>} 初始化完成
+     * @throws {Error} 当初始化过程遇到不可恢复的错误时抛出
      */
     async init() {
         try {
@@ -126,7 +141,9 @@ class LogManager {
 
     /**
      * 启动日志定时器
-     * 每5秒将缓冲区内容写入文件
+     * 每1秒将缓冲区内容写入文件，并在程序退出时确保写入
+     *
+     * @returns {void}
      */
     startLogTimer() {
         if (this.logTimer) return
@@ -143,9 +160,12 @@ class LogManager {
 
     /**
      * 记录日志
+     * 将日志条目添加到缓冲区，同时输出到控制台
+     *
      * @param {string} level - 日志级别 (INFO, WARN, ERROR, DEBUG)
      * @param {string} message - 日志消息
-     * @param {any} data - 附加数据（可选）
+     * @param {any} [data] - 附加数据（可选）
+     * @returns {void}
      */
     log(level, message, data = null) {
         if (!config['enable-log']) return
@@ -181,6 +201,10 @@ class LogManager {
     /**
      * 刷新日志到文件
      * 使用BetterNCM fs API将缓冲区中的所有日志写入文件
+     * 支持追加到现有文件或创建新文件，包含完整的错误处理
+     *
+     * @returns {Promise<void>} 写入完成
+     * @throws {Error} 当文件写入失败且备用存储也失败时抛出
      */
     async flushLogs() {
         if (
@@ -434,6 +458,15 @@ document.head.appendChild(pluginStyle) // 将样式添加到页面头部
  * 更新插件样式
  * 根据配置动态生成CSS样式，控制视频播放器的视觉效果
  * 包括模糊、亮度调节、透明度、位置等属性
+ *
+ * 样式特性：
+ * - 模糊效果：可配置的10px模糊
+ * - 亮度调节：暗化(0.5倍)或亮化(1.5倍)
+ * - 透明度控制：支持淡入淡出动画
+ * - 全屏覆盖：固定定位，覆盖整个窗口
+ * - 层级管理：z-index:9，确保在网易云界面下方
+ *
+ * @returns {void}
  */
 const updatePluginStyle = () => {
     pluginStyle.innerHTML = `
@@ -457,9 +490,18 @@ const updatePluginStyle = () => {
 
 /**
  * 切换视频URL并执行后续操作
+ * 实现平滑的视频切换效果，包含淡入淡出动画
+ *
+ * 切换流程：
+ * 1. 淡出当前视频（200ms动画）
+ * 2. 设置新的URL
+ * 3. 等待新页面加载完成
+ * 4. 淡入新视频（200ms动画）
+ * 5. 执行后续回调函数
+ *
  * @param {string} url - 要切换到的视频URL
  * @param {Function} after - 切换完成后要执行的回调函数
- * @returns {Promise} 返回Promise，表示切换完成
+ * @returns {Promise<void>} 返回Promise，表示切换完成
  */
 const switchUrl = (url, after) => {
     return new Promise(async (rs) => {
@@ -477,7 +519,9 @@ const switchUrl = (url, after) => {
 /**
  * 淡出动画效果
  * 将iframe透明度设置为0，实现视频淡出效果
- * @returns {Promise} 返回200ms延迟后的Promise
+ * 与CSS transition属性配合实现平滑的淡出动画
+ *
+ * @returns {Promise<void>} 返回200ms延迟后的Promise，确保动画完成
  */
 const fadeOut = () => {
     ifr.style.opacity = 0 // 设置透明度为0
@@ -487,7 +531,9 @@ const fadeOut = () => {
 /**
  * 淡入动画效果
  * 将iframe透明度设置为1，实现视频淡入效果
- * @returns {Promise} 返回200ms延迟后的Promise
+ * 与CSS transition属性配合实现平滑的淡入动画
+ *
+ * @returns {Promise<void>} 返回200ms延迟后的Promise，确保动画完成
  */
 const fadeIn = () => {
     ifr.style.opacity = 1 // 设置透明度为1
@@ -622,7 +668,10 @@ plugin.onLoad(() => {
                 // 检查是否处于网页全屏状态，若不是则重新进入
                 const isFullScreen =
                     ifr.contentDocument.querySelector('.mode-webscreen')
-                if (!isFullScreen && now - lastFullScreenCheck > FULL_SCREEN_CHECK_INTERVAL) {
+                if (
+                    !isFullScreen &&
+                    now - lastFullScreenCheck > FULL_SCREEN_CHECK_INTERVAL
+                ) {
                     btnFullScreen.click()
                     lastFullScreenCheck = now
                     logInfo('重新进入网页全屏模式')
@@ -634,7 +683,6 @@ plugin.onLoad(() => {
             // 标记播放器已初始化
             playerInitialized = true
             logInfo('Bilibili播放器初始化完成')
-
         } catch (error) {
             logError('Bilibili播放器初始化失败', error)
         }
@@ -744,12 +792,6 @@ plugin.onLoad(() => {
      * 实现智能匹配、时长过滤、缓存优化等功能
      */
     const reloadVideo = async () => {
-        // 检查插件是否启用
-        if (!config.enable) {
-            logDebug('插件已禁用，跳过视频加载')
-            return
-        }
-
         // 重置播放器状态，允许重新初始化
         resetPlayerState()
 
@@ -927,11 +969,11 @@ plugin.onConfig((tools) => {
 
         // 生成配置项的HTML结构，包括名称、描述和输入控件
         configDom.innerHTML = `
-            <span class="setting-item-name">${name}</span>                    // 配置项名称
-            <span class="setting-item-description">${description}</span>      // 配置项描述
+            <span class="setting-item-name">${name}</span>
+            <span class="setting-item-description">${description}</span>
             <input type="${
-                typeof config[key] === 'boolean' ? 'checkbox' : 'input' // 根据配置类型选择输入控件
-            }" style="color:black;">                                           // 输入控件样式
+                typeof config[key] === 'boolean' ? 'checkbox' : 'input'
+            }" style="color:black;">
         `
 
         // 获取输入控件的引用
@@ -961,47 +1003,65 @@ plugin.onConfig((tools) => {
     const style = document.createElement('style')
     style.innerHTML = `
         .setting-item {
-            display: flex;                           // 弹性布局
-            align-items: center;                     // 垂直居中对齐
-            justify-content: space-between;          // 两端对齐
-            padding: 0 10px;                         // 内边距
-            height: 40px;                            // 固定高度
-            border-bottom: 1px solid #e5e5e5;        // 底部边框
-            background: #ffffff;                     // 白色背景
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px;
+            height: 40px;
+            border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
+            background: transparent;
         }
 
         .setting-item-name {
-            font-size: 14px;                         // 配置名称字体大小
-            color: #333;                             // 深灰色文字
-            white-space: nowrap;                     // 不换行
-            overflow: hidden;                        // 隐藏溢出
-            text-overflow: ellipsis;                 // 省略号显示
+            font-size: 14px;
+            color: var(--text-color, #333);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .setting-item-description {
-            font-size: 12px;                         // 描述文字字体大小
-            color: #999;                             // 浅灰色文字
-            white-space: nowrap;                     // 不换行
-            overflow: hidden;                        // 隐藏溢出
-            text-overflow: ellipsis;                 // 省略号显示
+            font-size: 12px;
+            color: var(--description-color, #999);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .switch {
-            position: relative;                      // 相对定位
-            display: inline-block;                   // 行内块级元素
-            width: 60px;                             // 开关宽度
-            height: 34px;                            // 开关高度
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 34px;
         }
 
         .switch-input {
-            opacity: 0;                             // 透明度0
-            width: 0;                                // 宽度0
-            height: 0;                               // 高度0
+            opacity: 0;
+            width: 0;
+            height: 0;
         }
 
         .login-iframe{
-            width: 100%;                             // 登录iframe宽度
-            height: 500px;                           // 登录iframe高度
+            width: 100%;
+            height: 500px;
+        }
+
+        /* 亮色主题 */
+        :root {
+            --background-color: rgba(255, 255, 255, 0.1);
+            --border-color: rgba(255, 255, 255, 0.2);
+            --text-color: #333;
+            --description-color: #999;
+        }
+
+        /* 暗色主题 */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --background-color: rgba(0, 0, 0, 0.2);
+                --border-color: rgba(255, 255, 255, 0.1);
+                --text-color: #fff;
+                --description-color: #ccc;
+            }
         }
         `
 
@@ -1019,16 +1079,6 @@ plugin.onConfig((tools) => {
         }
 
         logInfo('配置已保存到localStorage', config)
-
-        // 根据启用状态控制视频播放器
-        if (config.enable) {
-            logInfo('启用插件，淡入视频')
-            fadeIn() // 启用时淡入视频
-        } else {
-            logInfo('禁用插件，淡出视频')
-            fadeOut() // 禁用时淡出视频
-            ifr.src = 'about:blank' // 清空iframe内容
-        }
 
         // 记录日志状态变更
         if (config['enable-log']) {
@@ -1078,22 +1128,22 @@ plugin.onConfig((tools) => {
                                 // 创建并注入自定义样式，优化登录界面显示
                                 const s = document.createElement('style')
                                 s.innerHTML = `
-.bili-mini-content-wp {                   // 登录弹窗容器
-    position: absolute;                     // 绝对定位
-    left: 0;                               // 左边对齐
-    top: 0;                                // 顶部对齐
-    right: 0;                              // 右边对齐
-    width: 100% !important;                // 强制宽度100%
-    height: 500px !important;              // 强制高度500px
-    border-radius: 0;                      // 无圆角
-}
-body{                                     // 页面主体
-    overflow:hidden;                       // 隐藏滚动条
-}
-.bili-mini-close-icon,.i_cecream{        // 关闭按钮和其他不需要的元素
-    display:none;                          // 隐藏显示
-}
-    `
+                                    .bili-mini-content-wp {
+                                        position: absolute;
+                                        left: 0;
+                                        top: 0;
+                                        right: 0;
+                                        width: 100% !important;
+                                        height: 500px !important;
+                                        border-radius: 0;
+                                    }
+                                    body{
+                                        overflow:hidden;
+                                    }
+                                    .bili-mini-close-icon,.i_cecream{
+                                        display:none;
+                                    }
+                                `
                                 td.head.append(s) // 将样式添加到页面头部
                             } else {
                                 // 如果没有找到登录按钮，说明已经登录，移除登录组件
@@ -1106,106 +1156,22 @@ body{                                     // 页面主体
         })
     )
 
-    /**
-     * 创建日志管理组件
-     * 显示日志文件信息并提供管理操作
-     */
-    const logInfoDom = dom('div', {
-        innerHTML: `
-            <div class="setting-item">
-                <span class="setting-item-name">日志管理</span>
-                <span class="setting-item-description">日志目录: ${
-                    logger.getLogBaseDir() || '初始化中...'
-                }</span>
-                <button id="refresh-log-btn" style="padding: 5px 10px; margin-left: 10px; cursor: pointer;">立即刷新日志</button>
-                <button id="view-log-btn" style="padding: 5px 10px; margin-left: 5px; cursor: pointer;">查看日志</button>
-                <button id="open-log-dir-btn" style="padding: 5px 10px; margin-left: 5px; cursor: pointer;">打开日志目录</button>
-            </div>
-            <div class="setting-item">
-                <span class="setting-item-description">当前文件: ${
-                    logger.getLogFilePath() || '初始化中...'
-                }</span>
-                <span style="font-size: 12px; color: #666; margin-left: 10px;">缓冲区: ${logger.getBufferSize()} 条</span>
-            </div>
-        `,
-        // 绑定刷新日志按钮事件
-        onclick: async (e) => {
-            if (e.target.id === 'refresh-log-btn') {
-                await logger.forceFlush()
-                e.target.textContent = '已刷新!'
-                setTimeout(() => {
-                    e.target.textContent = '立即刷新日志'
-                }, 2000)
-            } else if (e.target.id === 'view-log-btn') {
-                try {
-                    const mountedUrl = await logger.mountLogFile()
-                    window.open(mountedUrl, '_blank')
-                } catch (mountError) {
-                    console.error('无法挂载日志文件:', mountError)
-
-                    // 尝试直接读取日志文件内容
-                    try {
-                        const logContent = await logger.readLogFile()
-                        const blob = new Blob([logContent], {
-                            type: 'text/plain;charset=utf-8',
-                        })
-                        const url = URL.createObjectURL(blob)
-                        window.open(url, '_blank')
-                        setTimeout(() => URL.revokeObjectURL(url), 1000)
-                    } catch (readError) {
-                        console.error('无法读取日志文件:', readError)
-
-                        // 最后备用方案：显示localStorage中的日志
-                        const logs =
-                            localStorage.getItem('playwithbilio_logs') ||
-                            '无日志数据'
-                        const blob = new Blob([logs], {
-                            type: 'text/plain;charset=utf-8',
-                        })
-                        const url = URL.createObjectURL(blob)
-                        window.open(url, '_blank')
-                        setTimeout(() => URL.revokeObjectURL(url), 1000)
-                    }
-                }
-            } else if (e.target.id === 'open-log-dir-btn') {
-                const logBaseDir = logger.getLogBaseDir()
-                if (logBaseDir) {
-                    try {
-                        if (typeof betterncm !== 'undefined' && betterncm.fs) {
-                            const mountedUrl = await betterncm.fs.mountDir(
-                                logBaseDir
-                            )
-                            window.open(mountedUrl, '_blank')
-                        } else {
-                            alert('BetterNCM fs API不可用')
-                        }
-                    } catch (error) {
-                        console.error('无法挂载日志目录:', error)
-                        alert('无法打开日志目录: ' + error.message)
-                    }
-                } else {
-                    alert('日志目录未初始化')
-                }
-            }
-        },
-    })
 
     /**
      * 返回完整的配置界面DOM结构
-     * 包含标题、配置项列表、登录组件、日志管理和样式定义
+     * 包含标题、配置项列表、登录组件和样式定义
      */
     return dom(
         'div', // 主容器
         {
             // 插件标题和描述部分
             innerHTML: ` <div class="setting-item">
-        <span class="setting-item-name">Play With Bilibili MV</span>        // 插件名称
-        <span class="setting-item-description">使用 Bilibili 播放器自动播放 MV</span>  // 功能描述
+        <span class="setting-item-name">Play With Bilibili MV</span>
+        <span class="setting-item-description">使用 Bilibili 播放器自动播放 MV</span>
     </div>`,
         },
         ...configDoms, // 展开所有配置项DOM
         loginIfr, // 登录组件
-        logInfoDom, // 日志管理组件
         style // 样式定义
     )
 })
