@@ -24,6 +24,8 @@ const config = {
     lighten: false, // 是否亮化背景
     'search-kwd': '{name} {artist} MV/PV', // 搜索关键词模板
     'filter-length': true, // 是否根据音频时长过滤视频
+    'log-enable': true, // 是否启用日志系统
+    'log-level': 'info', // 日志级别：debug/info/warn/error
 }
 
 // 配置项的中文显示名称和描述
@@ -39,8 +41,142 @@ const configKeys = {
         '搜索关键词，支持变量替换，{name} 为歌曲名，{artist} 为歌手名',
     ],
     'filter-length': ['过滤时长', '根据音频时长匹配视频'],
+    'log-enable': ['日志系统', '启用插件日志系统'],
+    'log-level': ['日志级别', '日志输出级别：debug/info/warn/error'],
 }
 
+/**
+ * 日志系统 - PlayWithBilibili Logger
+ *
+ * 提供分级日志输出、格式化时间戳、配置控制等功能
+ * 支持日志级别：debug < info < warn < error
+ *
+ * 使用示例：
+ * logger.debug('调试信息', { data: 'test' })
+ * logger.info('普通信息', '操作完成')
+ * logger.warn('警告信息', '可能出现问题')
+ * logger.error('错误信息', error, { context: 'search' })
+ */
+const logger = {
+    // 日志级别优先级映射
+    levels: {
+        debug: 0,
+        info: 1,
+        warn: 2,
+        error: 3
+    },
+
+    /**
+     * 格式化时间戳为易读格式
+     * @returns {string} 格式化的时间字符串 HH:MM:SS.mmm
+     */
+    formatTimestamp() {
+        const now = new Date()
+        const hours = String(now.getHours()).padStart(2, '0')
+        const minutes = String(now.getMinutes()).padStart(2, '0')
+        const seconds = String(now.getSeconds()).padStart(2, '0')
+        const milliseconds = String(now.getMilliseconds()).padStart(3, '0')
+        return `${hours}:${minutes}:${seconds}.${milliseconds}`
+    },
+
+    /**
+     * 检查当前日志级别是否允许输出
+     * @param {string} level - 要检查的日志级别
+     * @returns {boolean} 是否允许输出
+     */
+    shouldLog(level) {
+        if (!config['log-enable']) return false
+
+        const currentLevel = config['log-level'] || 'info'
+        const currentPriority = this.levels[currentLevel] || 1
+        const messagePriority = this.levels[level] || 1
+
+        return messagePriority >= currentPriority
+    },
+
+    /**
+     * 核心日志输出方法
+     * @param {string} level - 日志级别
+     * @param {string} message - 主要消息
+     * @param {...any} args - 附加参数
+     */
+    log(level, message, ...args) {
+        if (!this.shouldLog(level)) return
+
+        const timestamp = this.formatTimestamp()
+        const prefix = `[PlayWithBilibili][${timestamp}][${level.toUpperCase()}]`
+
+        // 根据级别选择不同的console方法
+        switch (level) {
+            case 'debug':
+                console.debug(prefix, message, ...args)
+                break
+            case 'info':
+                console.info(prefix, message, ...args)
+                break
+            case 'warn':
+                console.warn(prefix, message, ...args)
+                break
+            case 'error':
+                console.error(prefix, message, ...args)
+                break
+            default:
+                console.log(prefix, message, ...args)
+        }
+    },
+
+    /**
+     * 调试级别日志 - 详细的调试信息
+     * @param {string} message - 日志消息
+     * @param {...any} args - 附加数据
+     */
+    debug(message, ...args) {
+        this.log('debug', message, ...args)
+    },
+
+    /**
+     * 信息级别日志 - 一般信息
+     * @param {string} message - 日志消息
+     * @param {...any} args - 附加数据
+     */
+    info(message, ...args) {
+        this.log('info', message, ...args)
+    },
+
+    /**
+     * 警告级别日志 - 警告信息
+     * @param {string} message - 日志消息
+     * @param {...any} args - 附加数据
+     */
+    warn(message, ...args) {
+        this.log('warn', message, ...args)
+    },
+
+    /**
+     * 错误级别日志 - 错误信息
+     * @param {string} message - 日志消息
+     * @param {...any} args - 附加数据
+     */
+    error(message, ...args) {
+        this.log('error', message, ...args)
+    },
+
+    /**
+     * 开始性能计时
+     * @param {string} label - 计时标签
+     * @returns {Function} 结束计时的函数
+     */
+    time(label) {
+        if (!this.shouldLog('debug')) return () => {}
+
+        const fullLabel = `[PlayWithBilibili][${label}]`
+        console.time(fullLabel)
+
+        return () => {
+            console.timeEnd(fullLabel)
+        }
+    }
+}
 
 // 创建Bilibili播放器iframe
 const ifr = document.createElement('iframe')
@@ -140,7 +276,7 @@ const fadeIn = () => {
 
 // 插件主入口函数
 plugin.onLoad(() => {
-    console.log('[PlayWithBilibili] 插件开始加载', {
+    logger.info('插件开始加载', {
         version: 'Pro',
         timestamp: new Date().toISOString(),
     })
@@ -151,7 +287,7 @@ plugin.onLoad(() => {
             config[key] = JSON.parse(localStorage[`playwithbilio.${key}`])
         } catch (e) {} // 忽略解析错误，使用默认值
     }
-    console.log('[PlayWithBilibili] 配置加载完成', config)
+    logger.info('配置加载完成', config)
     updatePluginStyle() // 应用初始样式
 
     // 播放器状态标志，避免重复初始化
@@ -179,7 +315,7 @@ plugin.onLoad(() => {
             }
             playerIntervalId = null
         }
-        console.log('[PlayWithBilibili] 播放器状态已重置')
+        logger.debug('播放器状态已重置')
     }
 
     /**
@@ -196,11 +332,11 @@ plugin.onLoad(() => {
     const initBiliPlayer = async () => {
         // 如果播放器已经初始化，直接返回
         if (playerInitialized) {
-            console.log('[PlayWithBilibili] 播放器已初始化，跳过重复初始化')
+            logger.debug('播放器已初始化，跳过重复初始化')
             return
         }
 
-        console.log('[PlayWithBilibili] 开始初始化Bilibili播放器')
+        logger.info('开始初始化Bilibili播放器')
 
         try {
             // 等待并找到网页全屏按钮
@@ -213,11 +349,11 @@ plugin.onLoad(() => {
             )
 
             if (!btnFullScreen) {
-                console.error('[PlayWithBilibili] 未找到网页全屏按钮')
+                logger.error('未找到网页全屏按钮')
                 return
             }
 
-            console.log('[PlayWithBilibili] 找到网页全屏按钮，点击进入全屏模式')
+            logger.debug('找到网页全屏按钮，点击进入全屏模式')
             btnFullScreen.click() // 点击进入网页全屏模式
 
             // 在iframe内部添加自定义样式
@@ -240,9 +376,7 @@ plugin.onLoad(() => {
 
             /* 视频适配模式：裁剪或包含 */
             video {
-                object-fit: ${
-                    config.cover ? 'cover' : 'contain'
-                };
+                object-fit: ${config.cover ? 'cover' : 'contain'};
             }
         `
             }
@@ -290,7 +424,7 @@ plugin.onLoad(() => {
                 ) {
                     btnFullScreen.click()
                     lastFullScreenCheck = now
-                    console.log('[PlayWithBilibili] 重新进入网页全屏模式')
+                    logger.debug('重新进入网页全屏模式')
                 }
 
                 updateStyle() // 重新应用样式，确保设置生效
@@ -298,9 +432,9 @@ plugin.onLoad(() => {
 
             // 标记播放器已初始化
             playerInitialized = true
-            console.log('[PlayWithBilibili] Bilibili播放器初始化完成')
+            logger.info('Bilibili播放器初始化完成')
         } catch (error) {
-            console.error('[PlayWithBilibili] Bilibili播放器初始化失败', error)
+            logger.error('Bilibili播放器初始化失败', error)
         }
     }
 
@@ -317,26 +451,356 @@ plugin.onLoad(() => {
      * @returns {Promise<Object>} 返回搜索结果的JSON对象
      */
     const searchVideo = async (kwd) => {
-        console.log('[PlayWithBilibili] 开始搜索视频', { keyword: kwd })
+        const endTimer = logger.time('searchVideo')
+        logger.debug('开始搜索视频', { keyword: kwd })
+
         try {
             const response = await biliFetch(
-                `https://api.bilibili.com/x/web-interface/search/type?search_type=video&order=a&keyword=${encodeURIComponent(
+                `https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=video&keyword=${encodeURIComponent(
                     kwd
                 )}`
             )
             const result = await response.json()
 
-            console.log('[PlayWithBilibili] 视频搜索完成', {
+            logger.debug('视频搜索完成', {
                 keyword: kwd,
                 resultCount: result.data?.result?.length || 0,
                 statusCode: result.code,
+                firstResult: result.data?.result?.[0]
+                    ? {
+                          title: result.data.result[0].title,
+                          duration: result.data.result[0].duration,
+                          bvid: result.data.result[0].bvid,
+                          aid: result.data.result[0].aid,
+                      }
+                    : null,
+            })
+
+            endTimer()
+            return result
+        } catch (error) {
+            logger.error('视频搜索失败', {
+                keyword: kwd,
+                error: error.message,
+            })
+            endTimer()
+            throw error
+        }
+    }
+
+    /**
+     * 获取视频详细信息
+     * 使用Bilibili官方API获取视频的精确时长等信息
+     * @param {string} bvid - 视频的bvid
+     * @returns {Promise<Object>} 返回视频详细信息的JSON对象
+     */
+    const getVideoInfo = async (bvid) => {
+        logger.debug('开始获取视频信息', { bvid })
+        try {
+            const response = await biliFetch(
+                `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`
+            )
+            const result = await response.json()
+
+            logger.debug('视频信息获取完成', {
+                bvid,
+                statusCode: result.code,
+                duration: result.data?.duration,
+                title: result.data?.title,
             })
 
             return result
         } catch (error) {
-            console.error('[PlayWithBilibili] 视频搜索失败', { keyword: kwd, error: error.message })
+            logger.error('视频信息获取失败', {
+                bvid,
+                error: error.message,
+            })
             throw error
         }
+    }
+
+    /**
+     * 解析搜索API返回的JSON数据为标准视频数组格式
+     * 将Bilibili API返回的复杂结构简化为统一格式
+     *
+     * @param {Object} jsonData - Bilibili搜索API返回的JSON数据
+     * @returns {Array} 返回标准格式的视频对象数组
+     */
+    const parseSearchResults = (jsonData) => {
+        logger.debug('开始解析搜索结果')
+
+        if (!jsonData?.data?.result || !Array.isArray(jsonData.data.result)) {
+            logger.warn('搜索结果格式无效', jsonData)
+            return []
+        }
+
+        const videos = jsonData.data.result.map((video) => ({
+            title:
+                video.title?.replace(/<em class="keyword">|<\/em>/g, '') || '', // 移除关键词高亮标签
+            bvid: video.bvid || '',
+            duration: video.duration || '', // HH:MM格式的时长字符串
+            playCount: video.play || 0, // 观看数
+            author: video.author || '',
+            arcurl: video.arcurl || '',
+        }))
+
+        logger.debug('搜索结果解析完成', {
+            totalVideos: videos.length,
+            firstVideo: videos[0] || null,
+        })
+
+        return videos
+    }
+
+    /**
+     * 按标题过滤视频，确保视频名包含歌曲名
+     * 使用粗略匹配，忽略大小写
+     *
+     * @param {Array} videos - 视频对象数组
+     * @param {string} songName - 歌曲名
+     * @returns {Array} 过滤后的视频数组
+     */
+    const filterByTitle = (videos, songName) => {
+        logger.debug('开始按标题过滤', {
+            songName,
+            videoCount: videos.length,
+        })
+
+        if (!songName || songName.trim() === '') {
+            logger.debug('歌曲名为空，跳过标题过滤')
+            return videos
+        }
+
+        const filteredVideos = videos.filter((video) => {
+            const titleLower = video.title.toLowerCase()
+            const songNameLower = songName.toLowerCase()
+            return titleLower.includes(songNameLower)
+        })
+
+        logger.debug('标题过滤完成', {
+            originalCount: videos.length,
+            filteredCount: filteredVideos.length,
+            songName,
+        })
+
+        return filteredVideos
+    }
+
+    /**
+     * 按时长过滤和匹配视频
+     * 根据配置项决定是否进行时长匹配
+     *
+     * @param {Array} videos - 视频对象数组
+     * @param {number} audioDuration - 音频时长（毫秒）
+     * @param {boolean} enableFilter - 是否启用时长过滤
+     * @returns {Promise<Array>} 返回按相似度排序的视频数组
+     */
+    const filterByDuration = async (videos, audioDuration, enableFilter) => {
+        const endTimer = logger.time('filterByDuration')
+        logger.debug('开始按时长过滤', {
+            videoCount: videos.length,
+            audioDuration: audioDuration / 1000, // 转换为秒
+            enableFilter,
+        })
+
+        if (!enableFilter) {
+            // 如果不启用时长过滤，直接返回原数组的第一个视频
+            logger.debug('时长过滤已禁用，返回第一个结果')
+            endTimer()
+            return videos.length > 0 ? [videos[0]] : []
+        }
+
+        const audioSeconds = Math.floor(audioDuration / 1000)
+        const audioMinutes = Math.floor(audioSeconds / 60)
+
+        // 阶段一：按分钟过滤
+        const minuteFilteredVideos = videos.filter((video) => {
+            // 解析视频时长字符串 HH:MM
+            const durationParts = video.duration.split(':').reverse()
+            const videoSeconds = durationParts.reduce((sum, part, index) => {
+                return sum + parseInt(part || 0) * Math.pow(60, index)
+            }, 0)
+            const videoMinutes = Math.floor(videoSeconds / 60)
+
+            // 分钟数必须相同
+            return videoMinutes === audioMinutes
+        })
+
+        logger.debug('分钟过滤完成', {
+            originalCount: videos.length,
+            minuteFilteredCount: minuteFilteredVideos.length,
+            audioMinutes,
+        })
+
+        if (minuteFilteredVideos.length === 0) {
+            logger.debug('没有分钟匹配的视频，返回空数组')
+            endTimer()
+            return []
+        }
+
+        // 阶段二：获取精确秒数
+        const videosWithExactDuration = await Promise.all(
+            minuteFilteredVideos.map(async (video) => {
+                let exactSeconds = 0
+
+                // 先尝试从时长字符串解析
+                const durationParts = video.duration.split(':').reverse()
+                exactSeconds = durationParts.reduce((sum, part, index) => {
+                    return sum + parseInt(part || 0) * Math.pow(60, index)
+                }, 0)
+
+                // 如果缓存中有精确时长，使用缓存值
+                if (videoDurationCache[video.bvid]) {
+                    exactSeconds = videoDurationCache[video.bvid]
+                } else {
+                    // 否则调用API获取精确时长
+                    try {
+                        const videoInfo = await getVideoInfo(video.bvid)
+                        if (videoInfo.code === 0 && videoInfo.data?.duration) {
+                            exactSeconds = videoInfo.data.duration
+                            videoDurationCache[video.bvid] = exactSeconds
+                        }
+                    } catch (error) {
+                        logger.warn(
+                            '获取精确时长失败，使用估算值',
+                            {
+                                bvid: video.bvid,
+                                error: error.message,
+                            }
+                        )
+                    }
+                }
+
+                return {
+                    ...video,
+                    exactSeconds,
+                }
+            })
+        )
+
+        // 阶段三：按原始顺序找到首个时长相差5s以内的视频
+        const matchedVideo = videosWithExactDuration.find(
+            (video) => Math.abs(video.exactSeconds - audioSeconds) < 5 // 5秒误差
+        )
+
+        logger.debug('时长匹配完成', {
+            hasMatch: !!matchedVideo,
+            matchedVideo: matchedVideo || null,
+        })
+
+        endTimer()
+        return matchedVideo ? [matchedVideo] : []
+    }
+
+    /**
+     * 缓存搜索结果
+     * 将歌曲和对应的bvid缓存起来，避免重复搜索
+     *
+     * @param {string} songKey - 歌曲缓存键（格式：歌曲名-歌手名）
+     * @param {string} bvid - 视频的bvid
+     */
+    const cacheResult = (songKey, bvid) => {
+        logger.debug('缓存搜索结果', { songKey, bvid })
+        urlMap[songKey] = bvid
+    }
+
+    /**
+     * 带缓存的视频搜索主函数
+     * 实现重构计划的6步搜索流程：
+     * 1. 先查找缓存
+     * 2. 执行搜索
+     * 3. 解析结果
+     * 4. 标题过滤
+     * 5. 时长过滤
+     * 6. 返回结果并缓存
+     *
+     * @param {string} songName - 歌曲名
+     * @param {string} artistName - 歌手名
+     * @param {number} audioDuration - 音频时长（毫秒）
+     * @returns {Promise<string|null>} 返回匹配的bvid，未找到返回null
+     */
+    const searchVideoWithCache = async (
+        songName,
+        artistName,
+        audioDuration
+    ) => {
+        const endTimer = logger.time('searchVideoWithCache')
+        const songKey = `${songName}-${artistName}`
+
+        logger.info('开始智能视频搜索', {
+            songName,
+            artistName,
+            audioDuration: audioDuration / 1000,
+        })
+
+        // 步骤1：先查找缓存
+        if (urlMap[songKey]) {
+            logger.info('使用缓存结果', {
+                songKey,
+                bvid: urlMap[songKey],
+            })
+            endTimer()
+            return urlMap[songKey]
+        }
+
+        // 步骤2：执行搜索
+        const keyword =
+            config['search-kwd']
+                .replace('{name}', songName)
+                .replace('{artist}', artistName) ||
+            `MV ${songName} - ${artistName}`
+
+        logger.info('搜索关键词', keyword)
+
+        let searchResult
+        try {
+            searchResult = await searchVideo(keyword)
+        } catch (error) {
+            logger.error('搜索失败', error)
+            endTimer()
+            return null
+        }
+
+        // 步骤3：解析结果为标准格式
+        const videos = parseSearchResults(searchResult)
+        if (videos.length === 0) {
+            logger.warn('搜索结果为空')
+            endTimer()
+            return null
+        }
+
+        // 步骤4：标题过滤
+        const titleFilteredVideos = filterByTitle(videos, songName)
+        if (titleFilteredVideos.length === 0) {
+            logger.warn('标题过滤后无结果')
+            endTimer()
+            return null
+        }
+
+        // 步骤5：时长过滤
+        const durationFilteredVideos = await filterByDuration(
+            titleFilteredVideos,
+            audioDuration,
+            config['filter-length']
+        )
+
+        if (durationFilteredVideos.length === 0) {
+            logger.warn('时长过滤后无结果')
+            endTimer()
+            return null
+        }
+
+        // 步骤6：返回结果并缓存
+        const selectedVideo = durationFilteredVideos[0]
+        logger.info('搜索完成，选择视频', {
+            title: selectedVideo.title,
+            bvid: selectedVideo.bvid,
+            duration: selectedVideo.duration,
+        })
+
+        cacheResult(songKey, selectedVideo.bvid)
+        endTimer()
+        return selectedVideo.bvid
     }
 
     /**
@@ -411,15 +875,18 @@ plugin.onLoad(() => {
     // 搜索结果缓存对象，避免重复API调用
     const urlMap = {}
 
+    // 视频时长信息缓存对象，避免重复API调用
+    const videoDurationCache = {}
+
     // iframe内部视频元素的引用，用于控制播放
     let ifrVideo = null
 
     /**
-     * 重新加载视频的核心函数
-     * 根据当前播放的歌曲搜索并加载对应的MV视频
-     * 实现智能匹配、时长过滤、缓存优化等功能
+     * 重新加载视频的核心函数（重构后）
+     * 使用新的搜索流程，简化逻辑，提高可维护性
      */
     const reloadVideo = async () => {
+        const endTimer = logger.time('reloadVideo')
         // 重置播放器状态，允许重新初始化
         resetPlayerState()
 
@@ -429,81 +896,28 @@ plugin.onLoad(() => {
                 data: { name, artists, duration }, // 解构获取歌曲名、歌手、时长
             } = getPlayingSong()
 
-            // 构建搜索关键词，支持变量替换
-            const kwd =
-                config['search-kwd']
-                    .replace('{name}', name) // 替换歌曲名
-                    .replace('{artist}', artists[0].name) ?? // 替换歌手名
-                `MV ${name} - ${artists[0].name}` // 默认搜索关键词格式
+            const artistName = artists[0]?.name || '未知歌手'
 
-            console.log('[PlayWithBilibili] 开始加载视频', {
+            logger.info('开始加载视频', {
                 songName: name,
-                artist: artists[0].name,
-                duration: duration,
-                searchKeyword: kwd,
+                artist: artistName,
+                duration: duration / 1000, // 转换为秒
             })
 
-            console.log('[PlayWithBilibili] Searching: ', kwd)
+            // 使用新的搜索流程
+            const bvid = await searchVideoWithCache(name, artistName, duration)
 
-            // 如果缓存中没有搜索结果，则进行搜索
-            if (!urlMap[kwd]) {
-                urlMap[kwd] = await searchVideo(kwd).then(
-                    (result) => (
-                        console.log('[PlayWithBilibili] Result: ', result),
-                        result
-                    )
-                )
-            }
+            if (bvid) {
+                // 构建视频页面URL
+                const videoUrl = `https://www.bilibili.com/video/${bvid}`
 
-            // 默认使用第一个搜索结果
-            let url = urlMap[kwd].data.result[0].arcurl
+                logger.info('找到匹配视频', {
+                    bvid,
+                    url: videoUrl,
+                })
 
-            // 如果启用了时长过滤功能
-            if (config['filter-length']) {
-                /**
-                 * 时长匹配算法
-                 * 目标：找到与音频时长最接近的MV视频
-                 *
-                 * 算法步骤：
-                 * 1. 转换：将搜索结果转换为 [URL, 时长(秒)] 数组
-                 * 2. 过滤：保留与音频时长相差小于5秒的视频
-                 * 3. 排序：按时长相似度排序（误差小的在前）
-                 *
-                 * 时长解析逻辑：
-                 * - 支持 "mm:ss" 或 "hh:mm:ss" 格式
-                 * - 按冒号分割后反转数组，秒在前
-                 * - 使用reduce计算总秒数：秒 + 分*60 + 时*3600
-                 */
-                const video = urlMap[kwd].data.result
-                    .map((v) => [
-                        v.arcurl,
-                        // 解析时长字符串为秒数
-                        v.duration
-                            .split(':') // 按冒号分割
-                            .reverse() // 反转数组，秒在前
-                            .reduce((a, b, i) => a + b * Math.pow(60, i), 0), // 转换为总秒数
-                    ])
-                    .filter((v) => Math.abs(v[1] - duration / 1000) < 5) // 5秒误差过滤
-                    .sort(
-                        // 按时长相似度排序，相似度高的在前
-                        (a, b) =>
-                            Math.abs(a[1] - duration / 1000) >
-                            Math.abs(b[1] - duration / 1000)
-                    )
-
-                if (video.length > 0) {
-                    url = video[0] // 使用时长最匹配的视频
-                } else {
-                    url = null // 没有找到合适的视频
-                }
-            }
-
-            if (url) {
                 // 切换到视频页面并初始化播放器
-                await switchUrl(
-                    urlMap[kwd].data.result[0].arcurl,
-                    initBiliPlayer
-                )
+                await switchUrl(videoUrl, initBiliPlayer)
 
                 // 等待并获取iframe内部的video元素
                 ifrVideo = await betterncm.utils.waitForFunction(
@@ -511,19 +925,24 @@ plugin.onLoad(() => {
                     100
                 )
 
-                console.log('[ PlayWithBili ] Video loaded', ifrVideo)
+                logger.debug('视频加载完成', ifrVideo)
                 ifrVideo.volume = 0 // 强制静音，避免音频干扰
             } else {
                 // 没有找到匹配的视频，清空播放器
-                console.warn('[PlayWithBilibili] 未找到匹配的视频', { keyword: kwd })
+                logger.warn('未找到匹配的视频', {
+                    songName: name,
+                    artist: artistName,
+                })
                 await fadeOut()
                 ifr.src = 'about:blank' // 加载空白页面
             }
         } catch (error) {
-            console.error('[PlayWithBilibili] 视频加载失败', error)
+            logger.error('视频加载失败', error)
             // 加载失败时清空播放器
             await fadeOut()
             ifr.src = 'about:blank'
+        } finally {
+            endTimer()
         }
     }
 
@@ -583,12 +1002,12 @@ plugin.onLoad(() => {
         }
     )
 
-    console.log('[PlayWithBilibili] 插件加载完成')
+    logger.info('插件加载完成')
 })
 
 // 插件配置界面生成函数
 plugin.onConfig((tools) => {
-    console.log('[PlayWithBilibili] 打开配置界面')
+    logger.debug('打开配置界面')
     const configDoms = [] // 存储所有配置项DOM元素的数组
 
     /**
@@ -602,33 +1021,57 @@ plugin.onConfig((tools) => {
         configDom.classList.add('setting-item')
 
         // 生成配置项的HTML结构，包括名称、描述和输入控件
-        configDom.innerHTML = `
-            <span class="setting-item-name">${name}</span>
-            <span class="setting-item-description">${description}</span>
-            <input type="${
-                typeof config[key] === 'boolean' ? 'checkbox' : 'input'
-            }" style="color:black;">
-        `
+        if (key === 'log-level') {
+            // 日志级别使用下拉选择框
+            configDom.innerHTML = `
+                <span class="setting-item-name">${name}</span>
+                <span class="setting-item-description">${description}</span>
+                <select style="color:black; padding: 4px; border-radius: 4px;">
+                    <option value="debug">Debug - 调试信息</option>
+                    <option value="info">Info - 一般信息</option>
+                    <option value="warn">Warn - 警告信息</option>
+                    <option value="error">Error - 错误信息</option>
+                </select>
+            `
 
-        // 获取输入控件的引用
-        const checkbox = configDom.querySelector('input')
+            const select = configDom.querySelector('select')
+            select.value = config[key]
 
-        // 根据配置类型设置初始值
-        if (typeof config[key] === 'boolean')
-            checkbox.checked = config[key] // 布尔值：设置勾选状态
-        else if (typeof config[key] === 'string') checkbox.value = config[key] // 字符串：设置输入值
+            select.addEventListener('change', () => {
+                config[key] = select.value
+                saveConfig()
+                updatePluginStyle()
+            })
+        } else {
+            // 其他配置项使用原有的checkbox和input
+            configDom.innerHTML = `
+                <span class="setting-item-name">${name}</span>
+                <span class="setting-item-description">${description}</span>
+                <input type="${
+                    typeof config[key] === 'boolean' ? 'checkbox' : 'input'
+                }" style="color:black;">
+            `
 
-        // 绑定值变化事件处理器
-        checkbox.addEventListener('change', () => {
-            // 根据配置类型更新配置对象
-            config[key] =
-                typeof config[key] === 'boolean'
-                    ? checkbox.checked
-                    : checkbox.value
+            // 获取输入控件的引用
+            const checkbox = configDom.querySelector('input')
 
-            saveConfig() // 保存配置到localStorage
-            updatePluginStyle() // 立即应用样式更改
-        })
+            // 根据配置类型设置初始值
+            if (typeof config[key] === 'boolean')
+                checkbox.checked = config[key] // 布尔值：设置勾选状态
+            else if (typeof config[key] === 'string') checkbox.value = config[key] // 字符串：设置输入值
+
+            // 绑定值变化事件处理器
+            checkbox.addEventListener('change', () => {
+                // 根据配置类型更新配置对象
+                config[key] =
+                    typeof config[key] === 'boolean'
+                        ? checkbox.checked
+                        : checkbox.value
+
+                saveConfig() // 保存配置到localStorage
+                updatePluginStyle() // 立即应用样式更改
+            })
+        }
 
         configDoms.push(configDom) // 将配置项添加到DOM数组
     }
@@ -712,15 +1155,16 @@ plugin.onConfig((tools) => {
      * @returns {void}
      */
     function saveConfig() {
-        console.log('[PlayWithBilibili] 保存配置变更', { oldConfig: { ...config } })
+        logger.debug('保存配置变更', {
+            oldConfig: { ...config },
+        })
 
         // 逐个保存配置项到localStorage
         for (const key in configKeys) {
             localStorage[`playwithbilio.${key}`] = JSON.stringify(config[key])
         }
 
-        console.log('[PlayWithBilibili] 配置已保存到localStorage', config)
-
+        logger.debug('配置已保存到localStorage', config)
     }
 
     /**
@@ -790,7 +1234,6 @@ plugin.onConfig((tools) => {
             },
         })
     )
-
 
     /**
      * 返回完整的配置界面DOM结构
