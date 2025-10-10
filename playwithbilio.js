@@ -24,6 +24,7 @@ const config = {
     lighten: false, // 是否亮化背景
     'search-kwd': '{name} {artist} MV/PV', // 搜索关键词模板
     'filter-length': true, // 是否根据音频时长过滤视频
+    'filter-play': 5000, // 播放量过滤阈值，-1为禁用，默认5000
     'log-enable': true, // 是否启用日志系统
     'log-level': 'info', // 日志级别：debug/info/warn/error
 }
@@ -41,6 +42,7 @@ const configKeys = {
         '搜索关键词，支持变量替换，{name} 为歌曲名，{artist} 为歌手名',
     ],
     'filter-length': ['过滤时长', '根据音频时长匹配视频'],
+    'filter-play': ['播放量过滤', '过滤播放量低于指定值的视频，-1为禁用，默认5000'],
     'log-enable': ['日志系统', '启用插件日志系统'],
     'log-level': ['日志级别', '日志输出级别：debug/info/warn/error'],
 }
@@ -587,6 +589,39 @@ plugin.onLoad(() => {
     }
 
     /**
+     * 按播放量过滤视频
+     * 根据配置的播放量阈值过滤视频，-1为禁用
+     *
+     * @param {Array} videos - 视频对象数组
+     * @param {number} playThreshold - 播放量阈值，-1为禁用
+     * @returns {Array} 过滤后的视频数组
+     */
+    const filterByPlayCount = (videos, playThreshold) => {
+        logger.debug('开始按播放量过滤', {
+            videoCount: videos.length,
+            playThreshold,
+        })
+
+        // 如果播放量过滤被禁用（-1），直接返回原数组
+        if (playThreshold === -1) {
+            logger.debug('播放量过滤已禁用，跳过过滤')
+            return videos
+        }
+
+        const filteredVideos = videos.filter((video) => {
+            return video.playCount >= playThreshold
+        })
+
+        logger.debug('播放量过滤完成', {
+            originalCount: videos.length,
+            filteredCount: filteredVideos.length,
+            playThreshold,
+        })
+
+        return filteredVideos
+    }
+
+    /**
      * 按时长过滤和匹配视频
      * 根据配置项决定是否进行时长匹配
      *
@@ -706,13 +741,14 @@ plugin.onLoad(() => {
 
     /**
      * 带缓存的视频搜索主函数
-     * 实现重构计划的6步搜索流程：
+     * 实现重构计划的7步搜索流程：
      * 1. 先查找缓存
      * 2. 执行搜索
      * 3. 解析结果
      * 4. 标题过滤
-     * 5. 时长过滤
-     * 6. 返回结果并缓存
+     * 5. 播放量过滤
+     * 6. 时长过滤
+     * 7. 返回结果并缓存
      *
      * @param {string} songName - 歌曲名
      * @param {string} artistName - 歌手名
@@ -783,19 +819,30 @@ plugin.onLoad(() => {
             audioDuration,
             config['filter-length']
         )
-
         if (durationFilteredVideos.length === 0) {
             logger.warn('时长过滤后无结果')
             endTimer()
             return null
         }
 
-        // 步骤6：返回结果并缓存
-        const selectedVideo = durationFilteredVideos[0]
+        // 步骤6：播放量过滤
+        const playFilteredVideos = filterByPlayCount(
+            durationFilteredVideos,
+            config['filter-play']
+        )
+        if (playFilteredVideos.length === 0) {
+            logger.warn('播放量过滤后无结果')
+            endTimer()
+            return null
+        }
+
+        // 步骤7：返回结果并缓存
+        const selectedVideo = playFilteredVideos[0]
         logger.info('搜索完成，选择视频', {
             title: selectedVideo.title,
             bvid: selectedVideo.bvid,
             duration: selectedVideo.duration,
+            playCount: selectedVideo.playCount,
         })
 
         cacheResult(songKey, selectedVideo.bvid)
