@@ -42,7 +42,10 @@ const configKeys = {
         '搜索关键词，支持变量替换，{name} 为歌曲名，{artist} 为歌手名',
     ],
     'filter-length': ['过滤时长', '根据音频时长匹配视频'],
-    'filter-play': ['播放量过滤', '过滤播放量低于指定值的视频，-1为禁用，默认5000'],
+    'filter-play': [
+        '播放量过滤',
+        '过滤播放量低于指定值的视频，-1为禁用，默认5000',
+    ],
     'log-enable': ['日志系统', '启用插件日志系统'],
     'log-level': ['日志级别', '日志输出级别：debug/info/warn/error'],
 }
@@ -65,7 +68,7 @@ const logger = {
         debug: 0,
         info: 1,
         warn: 2,
-        error: 3
+        error: 3,
     },
 
     /**
@@ -177,7 +180,7 @@ const logger = {
         return () => {
             console.timeEnd(fullLabel)
         }
-    }
+    },
 }
 
 // 创建Bilibili播放器iframe
@@ -458,7 +461,7 @@ plugin.onLoad(() => {
 
         try {
             const response = await biliFetch(
-                `https://api.bilibili.com/x/web-interface/wbi/search/type?search_type=video&keyword=${encodeURIComponent(
+                `https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword=${encodeURIComponent(
                     kwd
                 )}`
             )
@@ -490,36 +493,6 @@ plugin.onLoad(() => {
         }
     }
 
-    /**
-     * 获取视频详细信息
-     * 使用Bilibili官方API获取视频的精确时长等信息
-     * @param {string} bvid - 视频的bvid
-     * @returns {Promise<Object>} 返回视频详细信息的JSON对象
-     */
-    const getVideoInfo = async (bvid) => {
-        logger.debug('开始获取视频信息', { bvid })
-        try {
-            const response = await biliFetch(
-                `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`
-            )
-            const result = await response.json()
-
-            logger.debug('视频信息获取完成', {
-                bvid,
-                statusCode: result.code,
-                duration: result.data?.duration,
-                title: result.data?.title,
-            })
-
-            return result
-        } catch (error) {
-            logger.error('视频信息获取失败', {
-                bvid,
-                error: error.message,
-            })
-            throw error
-        }
-    }
 
     /**
      * 解析搜索API返回的JSON数据为标准视频数组格式
@@ -540,7 +513,7 @@ plugin.onLoad(() => {
             title:
                 video.title?.replace(/<em class="keyword">|<\/em>/g, '') || '', // 移除关键词高亮标签
             bvid: video.bvid || '',
-            duration: video.duration || '', // HH:MM格式的时长字符串
+            duration: video.duration || '', // MM:SS格式的时长字符串
             playCount: video.play || 0, // 观看数
             author: video.author || '',
             arcurl: video.arcurl || '',
@@ -555,17 +528,102 @@ plugin.onLoad(() => {
     }
 
     /**
-     * 按标题过滤视频，确保视频名包含歌曲名
-     * 使用粗略匹配，忽略大小写
+     * 智能相似度计算
+     * 处理包含额外信息的标题，优先匹配核心关键词
+     * @param {string} videoTitle - 视频标题
+     * @param {string} songName - 歌曲名
+     * @param {string} artistName - 歌手名
+     * @returns {number} 相似度百分比（0-1）
+     */
+    const calculateSimilarity = (videoTitle, songName, artistName) => {
+        if (!videoTitle || !songName) return 0
+
+        const title = videoTitle.toLowerCase()
+        const song = songName.toLowerCase()
+        const artist = artistName?.toLowerCase() || ''
+
+        // 移除常见干扰符号和词语
+        const cleanTitle = title
+            .replace(/【.*?】|\[.*?\]|\(.*?\)|「.*?」|『.*?』/g, '') // 移除括号内容
+            .replace(/官方投稿|official|mv|pv|feat\.?|ft\.?/gi, '') // 移除常见关键词
+            .replace(/[\s\-\|\/]+/g, ' ') // 标准化分隔符
+            .trim()
+
+        // 计算基础相似度（基于最长公共子序列）
+        const baseSimilarity = calculateBaseSimilarity(cleanTitle, song)
+
+        // 计算歌手相似度
+        const artistSimilarity = artist ? calculateBaseSimilarity(cleanTitle, artist) : 0
+
+        // 计算组合相似度
+        let finalSimilarity = baseSimilarity
+
+        // 如果歌手相似度较高，提升整体相似度
+        if (artistSimilarity > 0.3) {
+            finalSimilarity = Math.max(finalSimilarity, (baseSimilarity + artistSimilarity) / 2)
+        }
+
+        // 如果标题包含歌曲名，直接给高分
+        if (cleanTitle.includes(song)) {
+            finalSimilarity = Math.max(finalSimilarity, 0.8)
+        }
+
+        // 如果标题包含歌手名，提升相似度
+        if (artist && cleanTitle.includes(artist.replace('official', '').trim())) {
+            finalSimilarity = Math.max(finalSimilarity, 0.7)
+        }
+
+        return Math.min(finalSimilarity, 1.0)
+    }
+
+    /**
+     * 基础相似度计算（基于最长公共子序列）
+     * @param {string} str1 - 第一个字符串
+     * @param {string} str2 - 第二个字符串
+     * @returns {number} 相似度百分比（0-1）
+     */
+    const calculateBaseSimilarity = (str1, str2) => {
+        if (!str1 || !str2) return 0
+
+        const s1 = str1.toLowerCase()
+        const s2 = str2.toLowerCase()
+
+        // 计算最长公共子序列长度
+        const m = s1.length
+        const n = s2.length
+        const dp = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0))
+
+        for (let i = 1; i <= m; i++) {
+            for (let j = 1; j <= n; j++) {
+                if (s1[i - 1] === s2[j - 1]) {
+                    dp[i][j] = dp[i - 1][j - 1] + 1
+                } else {
+                    dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1])
+                }
+            }
+        }
+
+        const lcsLength = dp[m][n]
+        const maxLength = Math.max(m, n)
+
+        return lcsLength / maxLength
+    }
+
+    /**
+     * 按标题相似度过滤视频
+     * 使用智能相似度匹配，50%相似度阈值
      *
      * @param {Array} videos - 视频对象数组
      * @param {string} songName - 歌曲名
+     * @param {string} artistName - 歌手名
      * @returns {Array} 过滤后的视频数组
      */
-    const filterByTitle = (videos, songName) => {
-        logger.debug('开始按标题过滤', {
+    const filterByTitle = (videos, songName, artistName) => {
+        logger.debug('开始按标题相似度过滤', {
             songName,
+            artistName,
             videoCount: videos.length,
+            similarityThreshold: 0.5,
         })
 
         if (!songName || songName.trim() === '') {
@@ -574,15 +632,40 @@ plugin.onLoad(() => {
         }
 
         const filteredVideos = videos.filter((video) => {
-            const titleLower = video.title.toLowerCase()
-            const songNameLower = songName.toLowerCase()
-            return titleLower.includes(songNameLower)
+            const similarity = calculateSimilarity(video.title, songName, artistName)
+            const isMatch = similarity >= 0.5
+
+            if (!isMatch) {
+                logger.debug('标题相似度过滤失败', {
+                    videoTitle: video.title,
+                    songName,
+                    artistName,
+                    similarity: Math.round(similarity * 100),
+                    reason: '相似度低于50%',
+                })
+            } else {
+                logger.debug('标题相似度过滤通过', {
+                    videoTitle: video.title,
+                    songName,
+                    artistName,
+                    similarity: Math.round(similarity * 100),
+                })
+            }
+
+            return isMatch
         })
 
-        logger.debug('标题过滤完成', {
+        logger.debug('标题相似度过滤完成', {
             originalCount: videos.length,
             filteredCount: filteredVideos.length,
             songName,
+            artistName,
+            similarityThreshold: '50%',
+            filteredTitles: filteredVideos.map((v) => v.title),
+            failedCount: videos.length - filteredVideos.length,
+            similarityScores: filteredVideos.map(v =>
+                Math.round(calculateSimilarity(v.title, songName, artistName) * 100)
+            ),
         })
 
         return filteredVideos
@@ -609,13 +692,27 @@ plugin.onLoad(() => {
         }
 
         const filteredVideos = videos.filter((video) => {
-            return video.playCount >= playThreshold
+            const isMatch = video.playCount >= playThreshold
+
+            if (!isMatch) {
+                logger.debug('播放量过滤失败', {
+                    videoTitle: video.title,
+                    playCount: video.playCount,
+                    threshold: playThreshold,
+                    reason: '播放量低于阈值',
+                })
+            }
+
+            return isMatch
         })
 
         logger.debug('播放量过滤完成', {
             originalCount: videos.length,
             filteredCount: filteredVideos.length,
             playThreshold,
+            filteredTitles: filteredVideos.map((v) => v.title),
+            failedCount: videos.length - filteredVideos.length,
+            playCounts: filteredVideos.map((v) => v.playCount),
         })
 
         return filteredVideos
@@ -650,21 +747,45 @@ plugin.onLoad(() => {
 
         // 阶段一：按分钟过滤
         const minuteFilteredVideos = videos.filter((video) => {
-            // 解析视频时长字符串 HH:MM
-            const durationParts = video.duration.split(':').reverse()
-            const videoSeconds = durationParts.reduce((sum, part, index) => {
-                return sum + parseInt(part || 0) * Math.pow(60, index)
-            }, 0)
+            // 解析视频时长字符串 MM:SS（分钟:秒格式）
+            const durationParts = video.duration.split(':')
+            let videoSeconds = 0
+
+            if (durationParts.length === 2) {
+                // 格式：分钟:秒
+                const minutes = parseInt(durationParts[0] || 0)
+                const seconds = parseInt(durationParts[1] || 0)
+                videoSeconds = minutes * 60 + seconds
+            } else if (durationParts.length === 3) {
+                // 格式：小时:分钟:秒（处理特殊情况）
+                const hours = parseInt(durationParts[0] || 0)
+                const minutes = parseInt(durationParts[1] || 0)
+                const seconds = parseInt(durationParts[2] || 0)
+                videoSeconds = hours * 3600 + minutes * 60 + seconds
+            }
+
             const videoMinutes = Math.floor(videoSeconds / 60)
+            const isMatch = videoMinutes === audioMinutes
+
+            if (!isMatch) {
+                logger.debug('分钟过滤失败', {
+                    videoTitle: video.title,
+                    videoMinutes,
+                    audioMinutes,
+                    reason: '分钟数不匹配',
+                })
+            }
 
             // 分钟数必须相同
-            return videoMinutes === audioMinutes
+            return isMatch
         })
 
         logger.debug('分钟过滤完成', {
             originalCount: videos.length,
             minuteFilteredCount: minuteFilteredVideos.length,
             audioMinutes,
+            filteredTitles: minuteFilteredVideos.map((v) => v.title),
+            failedCount: videos.length - minuteFilteredVideos.length,
         })
 
         if (minuteFilteredVideos.length === 0) {
@@ -673,54 +794,73 @@ plugin.onLoad(() => {
             return []
         }
 
-        // 阶段二：获取精确秒数
-        const videosWithExactDuration = await Promise.all(
-            minuteFilteredVideos.map(async (video) => {
-                let exactSeconds = 0
+        // 阶段二：从MM:SS格式计算精确秒数
+        const videosWithExactDuration = minuteFilteredVideos.map((video) => {
+            // 解析视频时长字符串 MM:SS（分钟:秒格式）
+            const durationParts = video.duration.split(':')
+            let exactSeconds = 0
 
-                // 先尝试从时长字符串解析
-                const durationParts = video.duration.split(':').reverse()
-                exactSeconds = durationParts.reduce((sum, part, index) => {
-                    return sum + parseInt(part || 0) * Math.pow(60, index)
-                }, 0)
+            if (durationParts.length === 2) {
+                // 格式：分钟:秒
+                const minutes = parseInt(durationParts[0] || 0)
+                const seconds = parseInt(durationParts[1] || 0)
+                exactSeconds = minutes * 60 + seconds
+            } else if (durationParts.length === 3) {
+                // 格式：小时:分钟:秒（处理特殊情况）
+                const hours = parseInt(durationParts[0] || 0)
+                const minutes = parseInt(durationParts[1] || 0)
+                const seconds = parseInt(durationParts[2] || 0)
+                exactSeconds = hours * 3600 + minutes * 60 + seconds
+            }
 
-                // 如果缓存中有精确时长，使用缓存值
-                if (videoDurationCache[video.bvid]) {
-                    exactSeconds = videoDurationCache[video.bvid]
-                } else {
-                    // 否则调用API获取精确时长
-                    try {
-                        const videoInfo = await getVideoInfo(video.bvid)
-                        if (videoInfo.code === 0 && videoInfo.data?.duration) {
-                            exactSeconds = videoInfo.data.duration
-                            videoDurationCache[video.bvid] = exactSeconds
-                        }
-                    } catch (error) {
-                        logger.warn(
-                            '获取精确时长失败，使用估算值',
-                            {
-                                bvid: video.bvid,
-                                error: error.message,
-                            }
-                        )
-                    }
-                }
-
-                return {
-                    ...video,
-                    exactSeconds,
-                }
+            logger.debug('从MM:SS格式计算精确时长', {
+                videoTitle: video.title,
+                bvid: video.bvid,
+                durationString: video.duration,
+                exactSeconds,
             })
-        )
+
+            return {
+                ...video,
+                exactSeconds,
+            }
+        })
 
         // 阶段三：按原始顺序找到首个时长相差5s以内的视频
-        const matchedVideo = videosWithExactDuration.find(
-            (video) => Math.abs(video.exactSeconds - audioSeconds) < 5 // 5秒误差
-        )
+        const matchedVideo = videosWithExactDuration.find((video) => {
+            const timeDiff = Math.abs(video.exactSeconds - audioSeconds)
+            const isMatch = timeDiff < 5 // 5秒误差
+
+            if (!isMatch) {
+                logger.debug('秒级时长过滤失败', {
+                    videoTitle: video.title,
+                    videoSeconds: video.exactSeconds,
+                    audioSeconds,
+                    timeDifference: timeDiff,
+                    reason: '时长差异超过5秒',
+                })
+            }
+
+            return isMatch
+        })
 
         logger.debug('时长匹配完成', {
             hasMatch: !!matchedVideo,
-            matchedVideo: matchedVideo || null,
+            matchedVideo: matchedVideo
+                ? {
+                      title: matchedVideo.title,
+                      bvid: matchedVideo.bvid,
+                      duration: matchedVideo.exactSeconds,
+                      timeDifference: Math.abs(
+                          matchedVideo.exactSeconds - audioSeconds
+                      ),
+                  }
+                : null,
+            checkedVideos: videosWithExactDuration.map((v) => ({
+                title: v.title,
+                duration: v.exactSeconds,
+                timeDifference: Math.abs(v.exactSeconds - audioSeconds),
+            })),
         })
 
         endTimer()
@@ -745,9 +885,9 @@ plugin.onLoad(() => {
      * 1. 先查找缓存
      * 2. 执行搜索
      * 3. 解析结果
-     * 4. 标题过滤
-     * 5. 播放量过滤
-     * 6. 时长过滤
+     * 4. 标题相似度过滤（50%阈值）
+     * 5. 时长过滤
+     * 6. 播放量过滤
      * 7. 返回结果并缓存
      *
      * @param {string} songName - 歌曲名
@@ -805,13 +945,36 @@ plugin.onLoad(() => {
             return null
         }
 
-        // 步骤4：标题过滤
-        const titleFilteredVideos = filterByTitle(videos, songName)
+        logger.info('搜索结果解析完成', {
+            totalVideos: videos.length,
+            videoTitles: videos.map((v) => v.title),
+            videoDurations: videos.map((v) => v.duration),
+            videoPlayCounts: videos.map((v) => v.playCount),
+        })
+
+        // 步骤4：标题相似度过滤
+        const titleFilteredVideos = filterByTitle(videos, songName, artistName)
         if (titleFilteredVideos.length === 0) {
-            logger.warn('标题过滤后无结果')
+            logger.warn('标题相似度过滤后无结果', {
+                originalCount: videos.length,
+                songName,
+                artistName,
+                similarityThreshold: '50%',
+                reason: '所有视频标题与歌曲名相似度都低于50%',
+            })
             endTimer()
             return null
         }
+
+        logger.info('标题相似度过滤完成', {
+            originalCount: videos.length,
+            filteredCount: titleFilteredVideos.length,
+            similarityThreshold: '50%',
+            remainingTitles: titleFilteredVideos.map((v) => v.title),
+            similarityScores: titleFilteredVideos.map(v =>
+                Math.round(calculateSimilarity(v.title, songName, artistName) * 100)
+            ),
+        })
 
         // 步骤5：时长过滤
         const durationFilteredVideos = await filterByDuration(
@@ -820,10 +983,27 @@ plugin.onLoad(() => {
             config['filter-length']
         )
         if (durationFilteredVideos.length === 0) {
-            logger.warn('时长过滤后无结果')
+            logger.warn('时长过滤后无结果', {
+                originalCount: titleFilteredVideos.length,
+                audioDuration: audioDuration / 1000,
+                reason: '没有视频时长与音频时长匹配',
+            })
             endTimer()
             return null
         }
+
+        logger.info('时长过滤完成', {
+            originalCount: titleFilteredVideos.length,
+            filteredCount: durationFilteredVideos.length,
+            matchedVideo: durationFilteredVideos[0]
+                ? {
+                      title: durationFilteredVideos[0].title,
+                      duration:
+                          durationFilteredVideos[0].exactSeconds ||
+                          durationFilteredVideos[0].duration,
+                  }
+                : null,
+        })
 
         // 步骤6：播放量过滤
         const playFilteredVideos = filterByPlayCount(
@@ -831,18 +1011,37 @@ plugin.onLoad(() => {
             config['filter-play']
         )
         if (playFilteredVideos.length === 0) {
-            logger.warn('播放量过滤后无结果')
+            logger.warn('播放量过滤后无结果', {
+                originalCount: durationFilteredVideos.length,
+                playThreshold: config['filter-play'],
+                reason: '所有视频播放量都低于阈值',
+            })
             endTimer()
             return null
         }
+
+        logger.info('播放量过滤完成', {
+            originalCount: durationFilteredVideos.length,
+            filteredCount: playFilteredVideos.length,
+            playThreshold: config['filter-play'],
+            remainingTitles: playFilteredVideos.map((v) => v.title),
+            remainingPlayCounts: playFilteredVideos.map((v) => v.playCount),
+        })
 
         // 步骤7：返回结果并缓存
         const selectedVideo = playFilteredVideos[0]
         logger.info('搜索完成，选择视频', {
             title: selectedVideo.title,
             bvid: selectedVideo.bvid,
-            duration: selectedVideo.duration,
+            duration: selectedVideo.exactSeconds || selectedVideo.duration,
             playCount: selectedVideo.playCount,
+            author: selectedVideo.author,
+            searchProcess: {
+                originalResults: videos.length,
+                afterTitleFilter: titleFilteredVideos.length,
+                afterDurationFilter: durationFilteredVideos.length,
+                afterPlayFilter: playFilteredVideos.length,
+            },
         })
 
         cacheResult(songKey, selectedVideo.bvid)
@@ -921,9 +1120,6 @@ plugin.onLoad(() => {
 
     // 搜索结果缓存对象，避免重复API调用
     const urlMap = {}
-
-    // 视频时长信息缓存对象，避免重复API调用
-    const videoDurationCache = {}
 
     // iframe内部视频元素的引用，用于控制播放
     let ifrVideo = null
@@ -1105,7 +1301,8 @@ plugin.onConfig((tools) => {
             // 根据配置类型设置初始值
             if (typeof config[key] === 'boolean')
                 checkbox.checked = config[key] // 布尔值：设置勾选状态
-            else if (typeof config[key] === 'string') checkbox.value = config[key] // 字符串：设置输入值
+            else if (typeof config[key] === 'string')
+                checkbox.value = config[key] // 字符串：设置输入值
 
             // 绑定值变化事件处理器
             checkbox.addEventListener('change', () => {
@@ -1128,28 +1325,32 @@ plugin.onConfig((tools) => {
     style.innerHTML = `
         .setting-item {
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 10px;
-            height: 40px;
+            flex-direction: column;
+            padding: 12px 16px;
             border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
             background: transparent;
+            gap: 4px;
+        }
+
+        .setting-item-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
         }
 
         .setting-item-name {
             font-size: 14px;
+            font-weight: 500;
             color: var(--text-color, #333);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            flex: 1;
         }
 
         .setting-item-description {
             font-size: 12px;
             color: var(--description-color, #999);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            line-height: 1.4;
+            word-break: break-word;
         }
 
         .switch {
