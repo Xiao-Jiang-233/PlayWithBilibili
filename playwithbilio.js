@@ -528,6 +528,29 @@ plugin.onLoad(() => {
     }
 
     /**
+     * 清理歌名中的括号内容
+     * 移除【】、[]、{}、()、「」、『』等括号及其之间的内容
+     * @param {string} songName - 原始歌名
+     * @returns {string} 清理后的歌名
+     */
+    const cleanSongName = (songName) => {
+        if (!songName || typeof songName !== 'string') return songName || ''
+
+        // 移除各种括号及其内容
+        const cleaned = songName
+            .replace(/【.*?】|\[.*?\]|\{.*?\}|\(.*?\)|「.*?」|『.*?』/g, '')
+            .replace(/\s+/g, ' ') // 标准化空格
+            .trim()
+
+        logger.debug('歌名清理', {
+            original: songName,
+            cleaned: cleaned
+        })
+
+        return cleaned
+    }
+
+    /**
      * 智能相似度计算
      * 处理包含额外信息的标题，优先匹配核心关键词
      * @param {string} videoTitle - 视频标题
@@ -920,11 +943,12 @@ plugin.onLoad(() => {
         }
 
         // 步骤2：执行搜索
+        const cleanedSongName = cleanSongName(songName)
         const keyword =
             config['search-kwd']
-                .replace('{name}', songName)
+                .replace('{name}', cleanedSongName)
                 .replace('{artist}', artistName) ||
-            `MV ${songName} - ${artistName}`
+            `MV ${cleanedSongName} - ${artistName}`
 
         logger.info('搜索关键词', keyword)
 
