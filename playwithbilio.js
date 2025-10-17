@@ -445,6 +445,8 @@ plugin.onLoad(() => {
 
     // 将iframe添加到页面顶部，确保作为背景层显示
     document.body.prepend(ifr)
+    // 确保播放器初始状态可见
+    ifr.style.display = 'block'
 
     // 获取iframe内部window的fetch方法，用于调用Bilibili API
     const biliFetch = ifr.contentWindow.fetch
@@ -1183,6 +1185,9 @@ plugin.onLoad(() => {
                     url: videoUrl,
                 })
 
+                // 确保播放器可见
+                ifr.style.display = 'block'
+
                 // 切换到视频页面并初始化播放器
                 await switchUrl(videoUrl, initBiliPlayer)
 
@@ -1195,19 +1200,19 @@ plugin.onLoad(() => {
                 logger.debug('视频加载完成', ifrVideo)
                 ifrVideo.volume = 0 // 强制静音，避免音频干扰
             } else {
-                // 没有找到匹配的视频，清空播放器
-                logger.warn('未找到匹配的视频', {
+                // 没有找到匹配的视频，隐藏播放器以恢复网易云背景
+                logger.warn('未找到匹配的视频，隐藏播放器', {
                     songName: name,
                     artist: artistName,
                 })
                 await fadeOut()
-                ifr.src = 'about:blank' // 加载空白页面
+                ifr.style.display = 'none' // 隐藏播放器，恢复网易云背景
             }
         } catch (error) {
-            logger.error('视频加载失败', error)
-            // 加载失败时清空播放器
+            logger.error('视频加载失败，隐藏播放器', error)
+            // 加载失败时隐藏播放器以恢复网易云背景
             await fadeOut()
-            ifr.src = 'about:blank'
+            ifr.style.display = 'none' // 隐藏播放器，恢复网易云背景
         } finally {
             endTimer()
         }
