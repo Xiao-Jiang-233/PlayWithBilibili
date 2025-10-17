@@ -1,66 +1,126 @@
 /**
  * Play with Bilibili MV Pro - BetterNCM插件
  *
- * 功能说明：
  * 在网易云音乐播放音乐时，自动在背景播放对应的Bilibili MV视频
- * 支持智能匹配视频时长、音频同步、视觉效果配置等
  *
- * 主要特性：
- * - 自动搜索并匹配Bilibili MV视频
- * - 音频播放状态与视频播放状态完全同步
- * - 支持模糊、亮度调节、裁剪等视觉效果
- * - 智能时长匹配算法，选择最合适的MV版本
- * - 缓存机制优化性能
- * - 内置Bilibili登录功能
+ * 主要功能：
+ * - 智能匹配：根据歌曲信息自动搜索Bilibili MV
+ * - 音视频同步：实时同步播放状态和进度
+ * - 视觉效果：支持模糊、亮度、裁剪等视觉调节
+ * - 性能优化：缓存机制、防抖处理、定时器管理
+ * - 安全沙箱：iframe沙箱保护，防止安全风险
+ *
+ * @file playwithbilio.js
  */
 
-// 插件默认配置
+/**
+ * 插件配置对象
+ *
+ * 配置通过localStorage持久化存储，键名格式：`playwithbilio.{key}`
+ *
+ * @type {Object}
+ * @property {boolean} enable - 是否启用插件
+ * @property {boolean} blur - 是否启用模糊效果
+ * @property {boolean} danmmaku - 是否显示弹幕
+ * @property {boolean} cover - 是否将视频裁剪至窗口分辨率
+ * @property {boolean} darken - 是否暗化背景
+ * @property {boolean} lighten - 是否亮化背景
+ * @property {string} 'search-kwd' - 搜索关键词模板，支持{name}和{artist}变量
+ * @property {boolean} 'filter-length' - 是否根据音频时长过滤视频
+ * @property {number} 'filter-play' - 播放量过滤阈值，-1为禁用
+ * @property {boolean} 'log-enable' - 是否启用日志系统
+ * @property {string} 'log-level' - 日志级别：debug/info/warn/error
+ */
 const config = {
-    enable: true, // 是否启用插件
-    blur: false, // 是否启用模糊效果
-    danmmaku: false, // 是否显示弹幕
-    cover: true, // 是否将视频裁剪至窗口分辨率
-    darken: false, // 是否暗化背景
-    lighten: false, // 是否亮化背景
-    'search-kwd': '{name} {artist} MV/PV', // 搜索关键词模板
-    'filter-length': true, // 是否根据音频时长过滤视频
-    'filter-play': 5000, // 播放量过滤阈值，-1为禁用，默认5000
-    'log-enable': true, // 是否启用日志系统
-    'log-level': 'info', // 日志级别：debug/info/warn/error
+    enable: true,
+    blur: false,
+    danmmaku: false,
+    cover: true,
+    darken: false,
+    lighten: false,
+    'search-kwd': '{name} {artist} MV/PV',
+    'filter-length': true,
+    'filter-play': 5000,
+    'log-enable': true,
+    'log-level': 'info',
 }
 
-// 配置项的中文显示名称和描述
+/**
+ * 配置项元数据定义
+ *
+ * 用于自动生成配置界面，每个配置项包含：
+ * - 显示名称：配置项在界面中显示的中文名称
+ * - 描述信息：配置项的详细说明和用法
+ *
+ * 配置界面生成规则：
+ * - 布尔值：生成checkbox控件
+ * - 字符串：生成input控件
+ * - 特殊处理：log-level使用select下拉框
+ *
+ * @type {Object}
+ * @property {Array} enable - ['显示名称', '描述信息']
+ * @property {Array} blur - ['模糊', '启用10px模糊效果']
+ * @property {Array} danmmaku - ['弹幕', '启用Bilibili弹幕显示']
+ * @property {Array} cover - ['裁剪', '将视频自动裁剪至窗口分辨率（object-fit: cover）']
+ * @property {Array} darken - ['暗化', '暗化背景（亮度50%）']
+ * @property {Array} lighten - ['亮化', '亮化背景（亮度150%）']
+ * @property {Array} 'search-kwd' - ['搜索关键词', '搜索关键词模板，支持{name}（歌曲名）和{artist}（歌手名）变量替换']
+ * @property {Array} 'filter-length' - ['过滤时长', '根据音频时长精确匹配视频时长']
+ * @property {Array} 'filter-play' - ['播放量过滤', '过滤播放量低于指定值的视频，-1为禁用，默认5000']
+ * @property {Array} 'log-enable' - ['日志系统', '启用插件日志输出功能']
+ * @property {Array} 'log-level' - ['日志级别', '控制日志输出详细程度：debug（调试）/info（信息）/warn（警告）/error（错误）']
+ */
 const configKeys = {
     enable: ['启用', '启用 Bilibili 播放器'],
-    blur: ['模糊', '启用模糊效果'],
-    danmmaku: ['弹幕', '启用弹幕'],
-    cover: ['裁剪', '将视频自动裁剪至窗口分辨率'],
-    darken: ['暗化', '暗化背景'],
-    lighten: ['亮化', '亮化背景'],
+    blur: ['模糊', '启用10px模糊效果'],
+    danmmaku: ['弹幕', '启用Bilibili弹幕显示'],
+    cover: ['裁剪', '将视频自动裁剪至窗口分辨率（object-fit: cover）'],
+    darken: ['暗化', '暗化背景（亮度50%）'],
+    lighten: ['亮化', '亮化背景（亮度150%）'],
     'search-kwd': [
         '搜索关键词',
-        '搜索关键词，支持变量替换，{name} 为歌曲名，{artist} 为歌手名',
+        '搜索关键词模板，支持{name}（歌曲名）和{artist}（歌手名）变量替换',
     ],
-    'filter-length': ['过滤时长', '根据音频时长匹配视频'],
+    'filter-length': ['过滤时长', '根据音频时长精确匹配视频时长'],
     'filter-play': [
         '播放量过滤',
         '过滤播放量低于指定值的视频，-1为禁用，默认5000',
     ],
-    'log-enable': ['日志系统', '启用插件日志系统'],
-    'log-level': ['日志级别', '日志输出级别：debug/info/warn/error'],
+    'log-enable': ['日志系统', '启用插件日志输出功能'],
+    'log-level': [
+        '日志级别',
+        '控制日志输出详细程度：debug（调试）/info（信息）/warn（警告）/error（错误）',
+    ],
 }
 
 /**
  * 日志系统 - PlayWithBilibili Logger
  *
- * 提供分级日志输出、格式化时间戳、配置控制等功能
- * 支持日志级别：debug < info < warn < error
+ * 功能特性：
+ * - 📊 分级日志：debug < info < warn < error 四级日志输出
+ * - ⏰ 时间戳：毫秒级精度时间戳格式化
+ * - ⚙️ 配置控制：支持启用/禁用和级别过滤
+ * - ⏱️ 性能计时：内置性能测量和计时功能
+ * - 🎯 格式化输出：结构化日志输出，便于调试
+ *
+ * 日志级别说明：
+ * - debug: 详细调试信息，开发时使用
+ * - info: 一般操作信息，正常运行日志
+ * - warn: 警告信息，可能的问题但不会中断程序
+ * - error: 错误信息，程序异常或失败
  *
  * 使用示例：
  * logger.debug('调试信息', { data: 'test' })
  * logger.info('普通信息', '操作完成')
  * logger.warn('警告信息', '可能出现问题')
  * logger.error('错误信息', error, { context: 'search' })
+ *
+ * 性能计时示例：
+ * const endTimer = logger.time('searchVideo')
+ * // ... 执行操作
+ * endTimer() // 输出执行时间
+ *
+ * @namespace logger
  */
 const logger = {
     // 日志级别优先级映射
@@ -183,13 +243,37 @@ const logger = {
     },
 }
 
-// 创建Bilibili播放器iframe
+/**
+ * Bilibili播放器iframe元素
+ *
+ * 安全沙箱设置：
+ * - allow-scripts: 允许执行JavaScript
+ * - allow-forms: 允许表单提交
+ * - allow-same-origin: 允许同源访问
+ *
+ * 设计特点：
+ * - 固定定位：覆盖整个窗口作为背景
+ * - 层级管理：z-index:9，在网易云界面下方
+ * - 淡入淡出：透明度动画效果
+ *
+ * @type {HTMLIFrameElement}
+ */
 const ifr = document.createElement('iframe')
 ifr.classList.add('betterncm-plugin-playwithbilio') // 插件专用CSS类名
 ifr.src = 'https://www.bilibili.com' // 初始源为B站首页
 ifr.sandbox = 'allow-scripts allow-forms allow-same-origin' // 安全沙箱设置
 
-// 创建插件样式元素
+/**
+ * 插件样式元素
+ *
+ * 动态生成CSS样式，控制视频播放器的视觉效果：
+ * - 模糊效果：10px模糊
+ * - 亮度调节：暗化(0.5x)或亮化(1.5x)
+ * - 透明度控制：支持淡入淡出动画
+ * - 全屏覆盖：固定定位，覆盖整个窗口
+ *
+ * @type {HTMLStyleElement}
+ */
 const pluginStyle = document.createElement('style')
 pluginStyle.innerHTML = `` // 初始化为空样式
 document.head.appendChild(pluginStyle) // 添加到页面头部
@@ -495,7 +579,6 @@ plugin.onLoad(() => {
         }
     }
 
-
     /**
      * 解析搜索API返回的JSON数据为标准视频数组格式
      * 将Bilibili API返回的复杂结构简化为统一格式
@@ -546,7 +629,7 @@ plugin.onLoad(() => {
 
         logger.debug('歌名清理', {
             original: songName,
-            cleaned: cleaned
+            cleaned: cleaned,
         })
 
         return cleaned
@@ -578,14 +661,19 @@ plugin.onLoad(() => {
         const baseSimilarity = calculateBaseSimilarity(cleanTitle, song)
 
         // 计算歌手相似度
-        const artistSimilarity = artist ? calculateBaseSimilarity(cleanTitle, artist) : 0
+        const artistSimilarity = artist
+            ? calculateBaseSimilarity(cleanTitle, artist)
+            : 0
 
         // 计算组合相似度
         let finalSimilarity = baseSimilarity
 
         // 如果歌手相似度较高，提升整体相似度
         if (artistSimilarity > 0.3) {
-            finalSimilarity = Math.max(finalSimilarity, (baseSimilarity + artistSimilarity) / 2)
+            finalSimilarity = Math.max(
+                finalSimilarity,
+                (baseSimilarity + artistSimilarity) / 2
+            )
         }
 
         // 如果标题包含歌曲名，直接给高分
@@ -594,7 +682,10 @@ plugin.onLoad(() => {
         }
 
         // 如果标题包含歌手名，提升相似度
-        if (artist && cleanTitle.includes(artist.replace('official', '').trim())) {
+        if (
+            artist &&
+            cleanTitle.includes(artist.replace('official', '').trim())
+        ) {
             finalSimilarity = Math.max(finalSimilarity, 0.7)
         }
 
@@ -616,7 +707,9 @@ plugin.onLoad(() => {
         // 计算最长公共子序列长度
         const m = s1.length
         const n = s2.length
-        const dp = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0))
+        const dp = Array(m + 1)
+            .fill(0)
+            .map(() => Array(n + 1).fill(0))
 
         for (let i = 1; i <= m; i++) {
             for (let j = 1; j <= n; j++) {
@@ -657,7 +750,11 @@ plugin.onLoad(() => {
         }
 
         const filteredVideos = videos.filter((video) => {
-            const similarity = calculateSimilarity(video.title, songName, artistName)
+            const similarity = calculateSimilarity(
+                video.title,
+                songName,
+                artistName
+            )
             const isMatch = similarity >= 0.5
 
             if (!isMatch) {
@@ -688,8 +785,10 @@ plugin.onLoad(() => {
             similarityThreshold: '50%',
             filteredTitles: filteredVideos.map((v) => v.title),
             failedCount: videos.length - filteredVideos.length,
-            similarityScores: filteredVideos.map(v =>
-                Math.round(calculateSimilarity(v.title, songName, artistName) * 100)
+            similarityScores: filteredVideos.map((v) =>
+                Math.round(
+                    calculateSimilarity(v.title, songName, artistName) * 100
+                )
             ),
         })
 
@@ -905,15 +1004,22 @@ plugin.onLoad(() => {
     }
 
     /**
-     * 带缓存的视频搜索主函数
-     * 实现重构计划的7步搜索流程：
-     * 1. 先查找缓存
-     * 2. 执行搜索
-     * 3. 解析结果
-     * 4. 标题相似度过滤（50%阈值）
-     * 5. 时长过滤
-     * 6. 播放量过滤
-     * 7. 返回结果并缓存
+     * 智能视频搜索主函数（带缓存）
+     *
+     * 搜索流程（7步智能匹配）：
+     * 1. 🗂️ 缓存查找：检查是否已有缓存结果
+     * 2. 🔍 执行搜索：调用Bilibili API搜索视频
+     * 3. 📊 解析结果：标准化API返回数据格式
+     * 4. 📝 标题过滤：基于相似度算法过滤（50%阈值）
+     * 5. ⏱️ 时长过滤：精确匹配音频和视频时长
+     * 6. 📈 播放量过滤：过滤低播放量视频
+     * 7. 💾 缓存结果：将成功结果缓存供下次使用
+     *
+     * 算法特点：
+     * - 多级过滤：逐步缩小候选范围
+     * - 智能匹配：基于最长公共子序列的相似度计算
+     * - 性能优化：缓存机制避免重复API调用
+     * - 容错处理：各阶段失败都有优雅降级
      *
      * @param {string} songName - 歌曲名
      * @param {string} artistName - 歌手名
@@ -997,8 +1103,10 @@ plugin.onLoad(() => {
             filteredCount: titleFilteredVideos.length,
             similarityThreshold: '50%',
             remainingTitles: titleFilteredVideos.map((v) => v.title),
-            similarityScores: titleFilteredVideos.map(v =>
-                Math.round(calculateSimilarity(v.title, songName, artistName) * 100)
+            similarityScores: titleFilteredVideos.map((v) =>
+                Math.round(
+                    calculateSimilarity(v.title, songName, artistName) * 100
+                )
             ),
         })
 
@@ -1218,17 +1326,37 @@ plugin.onLoad(() => {
         }
     }
 
-    // 注册音频加载事件监听器
-    // 当网易云播放器加载新歌曲时，触发视频重新加载
-    // 使用防抖优化，避免频繁切换歌曲时的重复调用
+    /**
+     * 注册音频加载事件监听器
+     *
+     * 事件说明：
+     * - 触发时机：网易云播放器加载新歌曲时
+     * - 主要功能：触发视频重新搜索和加载
+     * - 优化措施：使用防抖避免频繁切换时的重复调用
+     *
+     * 防抖机制：
+     * - 目的：防止快速切换歌曲时重复执行搜索
+     * - 实现：通过betterncm.utils.debounce包装
+     * - 效果：确保只有最后一次调用真正执行
+     */
     legacyNativeCmder.appendRegisterCall(
         'Load', // 事件类型：加载
         'audioplayer', // 目标组件：音频播放器
         betterncm.utils.debounce(reloadVideo) // 使用防抖包装的重载视频函数
     )
 
-    // 注册播放状态同步监听器
-    // 监听网易云播放器的播放状态变化，同步控制视频播放状态
+    /**
+     * 注册播放状态同步监听器
+     *
+     * 同步机制：
+     * - 播放状态：1=播放，0=暂停
+     * - 同步逻辑：音频播放时视频播放，音频暂停时视频暂停
+     * - 实时响应：状态变化立即同步，确保用户体验
+     *
+     * 技术实现：
+     * - 使用HTML5 Video API的play()和pause()方法
+     * - 安全检查：使用可选链操作符避免空指针异常
+     */
     legacyNativeCmder.appendRegisterCall(
         'PlayState', // 事件类型：播放状态变化
         'audioplayer', // 目标组件：音频播放器
@@ -1243,8 +1371,21 @@ plugin.onLoad(() => {
         }
     )
 
-    // 注册播放进度同步监听器
-    // 监听音频播放进度，实时同步视频进度，确保音视频完全同步
+    /**
+     * 注册播放进度同步监听器
+     *
+     * 同步策略：
+     * - 精度控制：0.3秒误差阈值，避免频繁同步
+     * - 状态检查：确保音频播放时视频也在播放
+     * - 强制静音：避免音频冲突，确保良好体验
+     *
+     * 同步逻辑：
+     * 1. 检查视频元素是否存在
+     * 2. 计算音视频进度差异
+     * 3. 差异超过阈值时强制同步
+     * 4. 检查播放状态确保一致性
+     * 5. 强制静音避免音频冲突
+     */
     legacyNativeCmder.appendRegisterCall(
         'PlayProgress', // 事件类型：播放进度变化
         'audioplayer', // 目标组件：音频播放器
@@ -1277,15 +1418,30 @@ plugin.onLoad(() => {
     logger.info('插件加载完成')
 })
 
-// 插件配置界面生成函数
+/**
+ * 插件配置界面生成函数
+ *
+ * BetterNCM配置界面回调函数，自动生成配置界面：
+ * - 动态生成：根据configKeys自动创建界面元素
+ * - 类型适配：自动识别布尔值/字符串/数字类型
+ * - 实时保存：配置变更立即保存到localStorage
+ * - 即时生效：样式变更立即应用到播放器
+ *
+ * @param {Object} tools - BetterNCM提供的工具对象
+ * @returns {HTMLElement} 配置界面的DOM元素
+ */
 plugin.onConfig((tools) => {
     logger.debug('打开配置界面')
     const configDoms = [] // 存储所有配置项DOM元素的数组
 
     /**
      * 动态生成配置项DOM并绑定事件处理器
-     * 根据configKeys自动创建配置界面，支持布尔值和字符串类型
-     * 配置更改后自动保存到localStorage并应用效果
+     *
+     * 生成逻辑：
+     * - 遍历configKeys对象的所有配置项
+     * - 根据配置类型生成对应的HTML控件
+     * - 绑定change事件处理器
+     * - 配置变更时自动保存和应用
      */
     for (const [key, [name, description]] of Object.entries(configKeys)) {
         // 创建配置项容器
@@ -1421,13 +1577,16 @@ plugin.onConfig((tools) => {
 
     /**
      * 保存配置到localStorage并应用设置
-     * 遍历所有配置项，将当前配置值序列化存储
-     * 根据启用状态控制视频播放器的显示
      *
-     * 功能说明：
-     * - 序列化配置对象并存储到localStorage
-     * - 记录配置变更日志
-     * - 根据日志启用状态更新日志功能
+     * 保存机制：
+     * - 序列化：将配置值转换为JSON字符串
+     * - 存储：使用localStorage持久化存储
+     * - 键名：`playwithbilio.{key}`格式
+     *
+     * 应用效果：
+     * - 样式更新：立即应用视觉效果的变更
+     * - 日志控制：根据日志配置更新日志行为
+     * - 播放器状态：根据启用状态控制播放器显示
      *
      * @returns {void}
      */
@@ -1446,7 +1605,18 @@ plugin.onConfig((tools) => {
 
     /**
      * 创建Bilibili登录功能组件
-     * 提供内嵌式登录界面，自动检测登录状态并定制化显示
+     *
+     * 登录流程：
+     * 1. 显示登录按钮
+     * 2. 点击后加载B站登录页面
+     * 3. 自动点击登录按钮触发登录流程
+     * 4. 应用自定义样式优化显示效果
+     * 5. 登录成功后自动移除登录组件
+     *
+     * 安全特性：
+     * - 沙箱保护：iframe使用安全沙箱限制
+     * - 同源策略：允许同源访问确保功能正常
+     * - 样式隔离：自定义样式不影响主页面
      */
     const loginIfr = dom(
         'div', // 容器元素
